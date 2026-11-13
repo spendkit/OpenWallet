@@ -25,7 +25,7 @@
     "@types/pg": "^8.23.1",
     "drizzle-kit": "0.31.11",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
