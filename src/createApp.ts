@@ -5,6 +5,7 @@ import { CheckoutInteractor } from "./lib/interactors/CheckoutInteractor.js";
 import { DeveloperInteractor } from "./lib/interactors/DeveloperInteractor.js";
 import { PayoutInteractor } from "./lib/interactors/PayoutInteractor.js";
 import { SwapInteractor } from "./lib/interactors/SwapInteractor.js";
+import type { Alerter } from "./lib/services/Alerter.js";
 import { SwapLiveFeed } from "./lib/services/SwapLiveFeed.js";
 
 /**
@@ -21,6 +22,7 @@ export interface AgentCardsApp {
   developers?: DeveloperInteractor;
   payouts?: PayoutInteractor;
   circleDeposits?: CircleDeposits;
+  alerts?: Alerter;
   log?: (msg: string) => void;
 }
 
@@ -50,5 +52,5 @@ export function createApp(p: AppParams): AgentCardsApp & Required<Pick<AgentCard
     ? new SwapInteractor({ swaps: p.repos.swaps, app: cardholders, vault: p.vault, filler: p.checkoutFiller, lifecycle: p.lifecycle, config: p.swapConfig, live, log: p.log })
     : undefined;
   const payouts = new PayoutInteractor({ db: p.db, payouts: p.repos.payouts, ledger: p.ledger, checkout: checkouts, rail: p.payoutRail, log: p.log });
-  return { cardholders, checkouts, swaps, swapLive: swaps ? live : undefined, developers, payouts, circleDeposits: p.circleDeposits, log: p.log };
+  return { cardholders, checkouts, swaps, swapLive: swaps ? live : undefined, developers, payouts, circleDeposits: p.circleDeposits, alerts: p.alerts, log: p.log };
 }

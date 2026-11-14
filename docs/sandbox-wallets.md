@@ -35,7 +35,7 @@ Do not read or print the file in demos, logs or tickets. If you need to prove an
 ## Setting up the demo, step by step
 
 1. **Postgres.** Create a database and point at it: `createdb agent_cards` and `export DATABASE_URL=postgres://localhost/agent_cards` (this is also the default). Migrations apply themselves on boot.
-2. **Miden credentials** are already environment variables in the office shell (`MIDEN_CLIENT_ID`, `MIDEN_CLIENT_SECRET`, `MIDEN_UNIQUE_KEY`). If you need a `.env` for a tool, use `write_env_file`; do not type values anywhere. This machine's IP must be whitelisted in the Miden dashboard or calls return 401/403.
+2. **Miden credentials** are environment variables (`MIDEN_CLIENT_ID`, `MIDEN_CLIENT_SECRET`, `MIDEN_UNIQUE_KEY`), only needed for the Miden provider. If a tool needs a `.env`, create it yourself and keep it out of git. This machine's IP must be whitelisted in the Miden dashboard or calls return 401/403.
 3. **Start the service:** `node --import tsx src/main.ts`. First boot creates the wallet file. Check the log line `agent-cards sandbox on http://127.0.0.1:8787 (chain base-sepolia, rpc …)`.
 4. **Sign up and KYC** in the dashboard (`http://127.0.0.1:8787`) with dummy data. For the sandbox, `idType: PASSPORT`, a distinct id number/phone/email per demo user (identity de-duplication), and any small PNG/JPEG as the ID image.
 5. **Copy the deposit address** from the dashboard once the card shows.

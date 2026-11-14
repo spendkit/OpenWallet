@@ -1,7 +1,7 @@
 // Records the whole developer journey as a video you can share: a developer (Shopbot) onboards a user, the user verifies
 // on the hosted /connect page and sets limits, an agent pays a real shop over MCP, a payment over the limit is declined,
 // and the user pauses the agent. Every call is real (Miden sandbox); keys are masked on screen.
-// MOVES SANDBOX MONEY (a $50 simulated deposit, about $21 spent). Needs scripts/sandbox-up.sh running and ffmpeg for the .mp4.
+// MOVES SANDBOX MONEY (a $50 simulated deposit, about $21 spent). Needs the service running (pnpm dev:up) and ffmpeg for the .mp4.
 // Run: node --import tsx examples/developer/record-journey.ts   -> examples/developer/recordings/agent-cards-journey.mp4
 import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, rmSync } from "node:fs";
@@ -172,8 +172,8 @@ async function idPhoto(browser: import("playwright-core").Browser, path: string)
 
 // ---------- the recording ----------
 const health = await call("GET", "/healthz");
-if (health.status !== 200) fail(`${baseUrl} is not up: scripts/sandbox-up.sh`);
-if ((await call("GET", "/developer/v1/me")).status === 404) fail("this server has no developer API. Restart it on current code: scripts/sandbox-up.sh");
+if (health.status !== 200) fail(`${baseUrl} is not up: pnpm dev:up`);
+if ((await call("GET", "/developer/v1/me")).status === 404) fail("this server has no developer API. Restart it on current code: pnpm dev:down && pnpm dev:up");
 
 rmSync(outDir + "raw", { recursive: true, force: true });
 mkdirSync(outDir + "raw", { recursive: true });

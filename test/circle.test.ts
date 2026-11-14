@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, privateDecrypt, sign, constants } from "node:crypto";
 import { CircleDeposits } from "../src/adapters/deposits/CircleDeposits.js";
-import { CircleClient, CircleError, usdcToBaseUnits, uuidFrom, type CircleTx } from "../src/lib/clients/circle/CircleClient.js";
+import { CircleClient, CircleError, circleNetwork, usdcToBaseUnits, uuidFrom, type CircleTx } from "../src/lib/clients/circle/CircleClient.js";
 import { BASE_SEPOLIA_USDC } from "../src/adapters/deposits/BaseUsdcWatcher.js";
 import { Ledger, accounts } from "../src/lib/services/Ledger.js";
 
@@ -67,6 +67,21 @@ test("reconcile credits a missed deposit once and is a no-op on the next pass", 
   assert.equal(await s.ledger.balance(accounts.holding("card1")), 500);
 });
 
+test("a sub-cent-only transfer is logged as dust once, and reconcile neither repeats it nor lists it as ignored", async () => {
+  const s = setup();
+  const tiny: CircleTx = { id: "t7", blockchain: "BASE-SEPOLIA", tokenId: "tok", destinationAddress: ADDR, transactionType: "INBOUND", state: "COMPLETE", amounts: ["0.004"], txHash: "0xEEE" };
+  const dust: bigint[] = [];
+  const d = new CircleDeposits({
+    circle: { notificationKey: async () => ({ algorithm: "", publicKey: pub }), transaction: async () => tiny, token: async () => ({ symbol: "USDC", blockchain: "BASE-SEPOLIA", tokenAddress: BASE_SEPOLIA_USDC, decimals: 6 }), recentInbound: async () => [tiny] },
+    ledger: s.ledger, addresses: { cardFor: async (a) => (a.toLowerCase() === ADDR ? "card1" : undefined) }, onDust: (x) => dust.push(x.dustBase),
+  });
+  assert.deepEqual(await d.reconcile(), { checked: 1, credited: 0, ignored: [] });
+  assert.deepEqual(await d.reconcile(), { checked: 1, credited: 0, ignored: [] });
+  assert.equal(((await d.handle(s.body, hdr(s.body))) as { reason: string }).reason, "under one cent"); // webhook path too
+  assert.deepEqual(dust, [4000n]);
+  assert.equal(await s.ledger.balance(accounts.holding("card1")), 0);
+});
+
 test("a token called USDC at the wrong contract is not credited", async () => {
   const s = setup();
   const bad = new CircleDeposits({
@@ -91,6 +106,16 @@ test("a key id that is not a UUID, or that Circle does not know, is a 401 withou
     ledger: s.ledger, addresses: { cardFor: async () => undefined },
   });
   await assert.rejects(refused.handle(s.body, { signature: signBody(s.body), keyId: "0b1a7c59-8d4e-4f3a-9c21-5e6f7a8b9c0d" }), (e: unknown) => e instanceof CircleError && e.status === 403);
+});
+
+test("circleNetwork pairs key type and network and needs CIRCLE_LIVE=1 for mainnet", () => {
+  const T = "TEST_API_KEY:a:b", L = "LIVEKEY:a:b";
+  assert.equal(circleNetwork({ CIRCLE_API_KEY: T }), "BASE-SEPOLIA");
+  assert.throws(() => circleNetwork({ CIRCLE_API_KEY: L }), /not a TEST_API_KEY/);
+  assert.throws(() => circleNetwork({ CIRCLE_API_KEY: T, CIRCLE_NETWORK: "BASE", CIRCLE_LIVE: "1" }), /live Circle API key/);
+  assert.throws(() => circleNetwork({ CIRCLE_API_KEY: L, CIRCLE_NETWORK: "BASE" }), /CIRCLE_LIVE=1/);
+  assert.throws(() => circleNetwork({ CIRCLE_API_KEY: L, CIRCLE_NETWORK: "ETH" }), /must be/);
+  assert.equal(circleNetwork({ CIRCLE_API_KEY: L, CIRCLE_NETWORK: "BASE", CIRCLE_LIVE: "1" }), "BASE");
 });
 
 test("amount parsing is strict", () => {

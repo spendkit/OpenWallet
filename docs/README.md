@@ -1,9 +1,13 @@
 # agent-cards docs
 
-Written 2026-10-19 from the code in the working tree (Mira is still building parts of it; each doc marks what is OPEN).
+Written 2026-10-19 from the code in the working tree (parts are still being built; each doc marks what is OPEN).
 
 | Doc | Covers |
 | --- | --- |
+| [configuration.md](configuration.md) | Every environment variable: defaults, which mode needs it |
+| [../scripts/README.md](../scripts/README.md) | What each script does and which need accounts |
+| [../examples/README.md](../examples/README.md) | The examples and how to run them |
+| [circle-deposits.md](circle-deposits.md), [runbook.md](runbook.md), [postgres-production.md](postgres-production.md), [live-usdc-test.md](live-usdc-test.md) | Circle deposit rail, production runbook, Postgres for production, the plan for a live USDC test |
 | [architecture.md](architecture.md) | **Start here if you are working on agent-cards itself.** Components, the ledger, key flows, data model, security model, failure handling, known limits |
 | [getting-started.md](getting-started.md) | **Start here if you are integrating.** Sandbox keys in one command, first agent payment, sample shop, connecting an agent, troubleshooting |
 | [Checkout SDK](../sdk/checkout/README.md) | `@agent-cards/checkout` reference: merchant and agent clients, statuses, payouts, the HTTP API table |

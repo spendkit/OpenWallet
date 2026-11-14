@@ -5,7 +5,7 @@ Runnable scripts for the [developer API](../../docs/developers.md): onboarding, 
 ## Setup
 
 ```sh
-scripts/sandbox-up.sh      # service at http://127.0.0.1:8787 (needs the Miden credentials in your shell; see docs/getting-started.md)
+pnpm dev:up      # service at http://127.0.0.1:8787 (mock card provider unless MIDEN_* is set; see docs/getting-started.md)
 ```
 
 `AGENT_CARDS_URL` overrides the URL. The first demo signs up a developer and saves the keys it makes to `examples/developer/.env.developer-demo` (mode 600, git-ignored, never printed). The others read it.

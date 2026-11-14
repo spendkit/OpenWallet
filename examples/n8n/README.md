@@ -1,6 +1,6 @@
 # n8n: an agent pays with its Agent Card
 
-Five n8n workflows that let an agent pay with its Agent Card against the sandbox service (`scripts/sandbox-up.sh`, port 8787): three pay an Agent Cards checkout (`cs_...` from `/merchant/v1/checkouts`), one pays a Stripe checkout link.
+Five n8n workflows that let an agent pay with its Agent Card against the sandbox service (`pnpm dev:up`, port 8787): three pay an Agent Cards checkout (`cs_...` from `/merchant/v1/checkouts`), one pays a Stripe checkout link.
 
 | File | What it does | Needs |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Reproduce it from a clone (sandbox only, no real money):
 
 ```sh
 # 1. service with hosted checkouts and Stripe test-card mode (needs CARD_VAULT_KEY, see docs/checkout-swap.md)
-SWAP_ENABLED=1 SWAP_STRIPE_TEST_CARD=1 scripts/sandbox-up.sh
+SWAP_ENABLED=1 SWAP_STRIPE_TEST_CARD=1 pnpm dev:up
 # 2. a funded test agent; writes AGENT_CARDS_AGENT_TOKEN to .env.sandbox-keys
 node --import tsx scripts/dev-quickstart.ts --fresh
 # 3. n8n 2.x on Node 24 running at :5678, then import credentials + workflow (keys come from the environment, never printed)

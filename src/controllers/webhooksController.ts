@@ -17,12 +17,15 @@ export const circleWebhook = (app: AgentCardsApp) =>
     try {
       const r = await circle.handle(req.rawBody, { signature: header(req.headers["x-circle-signature"]), keyId: header(req.headers["x-circle-key-id"]) });
       if (r.status === "ignored" && !/^type /.test(r.reason)) app.log?.(`circle webhook ignored: ${r.reason}`);
+      await app.alerts?.clear("circle-webhook", "Circle webhook handled a delivery again.");
       sendJson(res, 200, { ok: true, status: r.status });
     } catch (e) {
       if (e instanceof CircleError && e.status === 401) {
         app.log?.(`circle webhook refused: ${e.message}`);
         throw unauthorizedError("invalid signature");
       }
+      // Anything but a bad signature is ours (Circle API down, ledger error): Circle will retry, and a person should know.
+      await app.alerts?.raise("circle-webhook", `Circle webhook failed (Circle will retry): ${(e as Error).message}`);
       throw e;
     }
   });

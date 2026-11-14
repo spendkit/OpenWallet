@@ -2,6 +2,8 @@ import type { Ledger } from "../../lib/services/Ledger.js";
 import { baseUnitsToCents } from "../../lib/utils/units.js";
 import { CIRCLE_CHAINS, CIRCLE_USDC, CircleError, usdcToBaseUnits, verifyCircleSignature, type CircleClient, type CircleTx } from "../../lib/clients/circle/CircleClient.js";
 
+const UNDER_ONE_CENT = "under one cent";
+
 /** Circle notification key ids are UUIDs; anything else is refused before we ask Circle about it. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,6 +25,16 @@ export interface CircleDepositsDeps {
 /** Turns Circle `transactions.inbound` webhooks into ledger credits. Throws on anything Circle should retry. */
 export class CircleDeposits {
   constructor(private readonly d: CircleDepositsDeps) {}
+
+  /** Transfers whose dust this process already reported: a sub-cent transfer is "ignored" again on every reconcile pass. Bounded. */
+  private readonly dustReported = new Set<string>();
+  private reportDust(txHash: string, dustBase: bigint): void {
+    const k = txHash.toLowerCase();
+    if (this.dustReported.has(k)) return;
+    if (this.dustReported.size >= 5000) this.dustReported.clear();
+    this.dustReported.add(k);
+    this.d.onDust?.({ txHash, dustBase });
+  }
 
   /** @throws CircleError with status 401 for a bad signature; any other throw means "retry later". */
   async handle(rawBody: string, headers: { signature?: string; keyId?: string }): Promise<CircleOutcome> {
@@ -64,7 +76,8 @@ export class CircleDeposits {
       const r = await this.credit(tx);
       if (r.status === "credited" && r.isNew) credited++;
       // Transfers to our own addresses that were not credited (wrong token, odd shape, sub-cent) are the ones to surface.
-      if (r.status === "ignored" && r.reason !== "not one of our deposit addresses") ignored.push({ id: tx.id, reason: r.reason });
+      // (A sub-cent transfer is reported once through onDust instead, so it is not repeated here.)
+      if (r.status === "ignored" && r.reason !== "not one of our deposit addresses" && r.reason !== UNDER_ONE_CENT) ignored.push({ id: tx.id, reason: r.reason });
     }
     return { checked: txs.length, credited, ignored };
   }
@@ -85,7 +98,10 @@ export class CircleDeposits {
     const base = usdcToBaseUnits(tx.amounts[0]!);
     if (!base || base === 0n) return { status: "ignored", reason: "bad amount" };
     const { cents, dustBase } = baseUnitsToCents(base, 6);
-    if (cents === 0) return { status: "ignored", reason: "under one cent" };
+    if (cents === 0) {
+      this.reportDust(tx.txHash, dustBase); // nothing to credit, but the money arrived: say so once
+      return { status: "ignored", reason: UNDER_ONE_CENT };
+    }
 
     const label = `circle-${chain}`;
     // Only for the log line: whether this call is the one that credits. The ledger key is what prevents a double credit.
@@ -93,7 +109,7 @@ export class CircleDeposits {
     await this.d.ledger.confirmDeposit({ chain: label, asset: "USDC", cardId, amountCents: cents, txHash: tx.txHash, logIndex: 0 });
     const out = { status: "credited", cardId, amountCents: cents, chain, isNew } as const;
     if (isNew) {
-      if (dustBase > 0n) this.d.onDust?.({ txHash: tx.txHash, dustBase });
+      if (dustBase > 0n) this.reportDust(tx.txHash, dustBase);
       this.d.onCredited?.(out);
     }
     return out;

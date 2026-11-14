@@ -7,7 +7,7 @@ const when = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "n
 const TOKEN_KEY = "agentCardsUserToken";
 const TIERS = { quick: "Starter limits", full: "Full limits" };
 const CHAINS = { "base-sepolia": "Base Sepolia", "ethereum-sepolia": "Ethereum Sepolia", base: "Base", "sandbox-sim": "Sandbox" };
-const EXPLORERS = { "base-sepolia": "https://sepolia.basescan.org/tx/", "ethereum-sepolia": "https://sepolia.etherscan.io/tx/" };
+const EXPLORERS = { base: "https://basescan.org/tx/", "base-sepolia": "https://sepolia.basescan.org/tx/", "ethereum-sepolia": "https://sepolia.etherscan.io/tx/" };
 const chainName = (c) => CHAINS[String(c ?? "").replace(/^circle-/, "")] ?? CHAINS[c] ?? String(c ?? "").split("-").map(cap).join(" ");
 const FIELDS = { firstName: "first name", lastName: "last name", dateOfBirth: "date of birth", idType: "ID type", idNumber: "ID number", idFrontImage: "ID photo", address1: "address", zipcode: "postcode",
   amountCents: "amount", perTransactionCents: "per-payment limit", dailyCents: "daily limit", allowedMccs: "MCCs", mcc: "MCC", idempotencyKey: "idempotency key" };
@@ -326,7 +326,7 @@ function updateFund() {
     body._h = null;
     body.innerHTML = `<div class="ph"><div><h1>Fund</h1><p>Send USDC to your deposit address. It lands on your card automatically.</p></div></div>
       <div class="card"><h2>Deposit address</h2><div id="fundIntro" class="muted" style="margin-bottom:12px"></div><div id="depAddr"></div>
-        <p class="muted small" style="margin:14px 0 0">Free test USDC: <a href="https://faucet.circle.com" target="_blank" rel="noopener">faucet.circle.com</a> → choose <b>Base Sepolia</b>. The faucet opens on Ethereum Sepolia, which also works but is slower.</p></div>
+        <p id="faucetNote" class="muted small" style="margin:14px 0 0" hidden>Free test USDC: <a href="https://faucet.circle.com" target="_blank" rel="noopener">faucet.circle.com</a> → choose <b>Base Sepolia</b>. The faucet opens on Ethereum Sepolia, which also works but is slower.</p></div>
       ${state.simulatedDeposits ? `<form id="simForm" class="card" novalidate><h2>Simulate a deposit</h2><p class="muted">Sandbox shortcut: credits your card as if USDC had arrived. It is labelled “simulated” in the ledger.</p>
         <div class="row"><label>Amount ($)<input id="simAmt" value="25" size="8" inputmode="decimal"></label><button type="submit" id="sim" class="accent">Simulate deposit</button></div></form>` : ""}
       <div id="depTables" class="panel"></div>`;
@@ -340,9 +340,12 @@ function updateFund() {
   const dep = c.deposit.address;
   const nets = c.deposit.networks ?? [c.deposit.chain];
   const netNames = nets.map(chainName);
-  const timing = c.deposit.rail === "circle" ? "Credited once the network confirms it (about 5 minutes on a testnet)" : "Credited after 5 blocks (about 10 s on Base, 1 min on Ethereum)";
-  setHTML($("#fundIntro"), `<div class="chips">${netNames.map((n, i) => `<span class="badge ${i ? "" : "accent"}">USDC · ${esc(n)}</span>`).join("")}<span class="badge warn">Testnet</span></div>
-    <p style="margin:0 0 8px"><strong>Send only USDC on ${esc(netNames.join(" or "))}.</strong> Tokens or networks other than these will not be credited and cannot be recovered.</p>${esc(timing)}, then moved onto the card. Minimum card top-up $1.00.`);
+  const testnet = nets.some((n) => /sepolia|goerli|testnet/i.test(String(n)));
+  $("#faucetNote").hidden = !testnet;
+  const timing = c.deposit.rail === "circle" ? `Credited once the network confirms it (${testnet ? "about 5 minutes on a testnet" : "usually within a few minutes"})` : "Credited after 5 blocks (about 10 s on Base, 1 min on Ethereum)";
+  setHTML($("#fundIntro"), `<div class="chips">${netNames.map((n, i) => `<span class="badge ${i ? "" : "accent"}">USDC · ${esc(n)}</span>`).join("")}${testnet ? '<span class="badge warn">Testnet</span>' : ""}</div>
+    <p style="margin:0 0 8px"><strong>Send only USDC on ${esc(netNames.join(" or "))}.</strong></p>${esc(timing)}, then moved onto the card. Minimum card top-up $1.00.
+    <div class="warnbox" role="note"><strong>Wrong network means lost funds.</strong> This address only sees USDC that arrives on ${esc(netNames.join(" or "))}. USDC sent on any other network (Ethereum, Polygon, Arbitrum…) and USDT on any network are not supported, will not be credited and usually cannot be recovered. Check the network in your wallet before you send.</div>`);
   setHTML($("#depAddr"), dep ? `<div class="addr"><span class="mono">${esc(dep)}</span><button type="button" class="sm" data-copy="${esc(dep)}">Copy</button></div>` : `<p class="muted">Creating your address…</p>`);
   setHTML($("#depTables"), `
     ${c.deposits.length ? `<div class="card"><h2>Deposits</h2><div class="scroll"><table><thead><tr><th>When</th><th>Network</th><th>Reference</th><th class="num">Amount</th></tr></thead><tbody>${c.deposits.map((d) => `<tr><td>${when(d.at)}</td><td>${d.simulated ? '<span class="badge">Simulated</span>' : esc(chainName(d.chain))}</td><td class="mono">${d.simulated ? "–" : `<a href="${esc(EXPLORERS[String(d.chain).replace(/^circle-/, "")] ?? EXPLORERS["base-sepolia"])}${esc(d.reference)}" target="_blank" rel="noopener">${esc(d.reference.slice(0, 14))}…</a>`}</td><td class="num">${usd(d.amountCents)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}

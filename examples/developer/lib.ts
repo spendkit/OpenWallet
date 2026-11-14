@@ -36,7 +36,7 @@ export async function call<T = any>(method: string, path: string, token?: string
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    return fail(`cannot reach ${baseUrl}. Start the sandbox service: scripts/sandbox-up.sh`);
+    return fail(`cannot reach ${baseUrl}. Start the service: pnpm dev:up`);
   }
   return { status: res.status, data: (await res.json().catch(() => ({}))) as T };
 }
@@ -82,7 +82,7 @@ export async function kycAsUser(session: string, tag: string): Promise<void> {
   await until("the card to be issued", async () => (await call("POST", "/api/me/refresh", session)).data, (d: any) => d.card?.deposit?.address);
 }
 
-/** SANDBOX SHORTCUT: a simulated USDC deposit (needs ALLOW_SIMULATED_DEPOSITS=1, which sandbox-up.sh sets), waits for the card top-up. */
+/** SANDBOX SHORTCUT: a simulated USDC deposit (needs ALLOW_SIMULATED_DEPOSITS=1, which pnpm dev:up sets), waits for the card top-up. */
 export async function simulatedDeposit(session: string, amountCents: number): Promise<void> {
   const r = await call("POST", "/api/me/simulate-deposit", session, { amountCents });
   if (r.status !== 202) fail(`simulated deposit refused (${r.status}: ${r.data?.error ?? "no detail"}). Start the service with ALLOW_SIMULATED_DEPOSITS=1.`);

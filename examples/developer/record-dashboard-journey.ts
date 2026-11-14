@@ -3,7 +3,7 @@
 // REST snippets) from the Developers page. Every step is the real web app against the running service (Miden sandbox).
 // Then funding, budgets, playground payments, the request log, take-back, revoke, key rotation and log-in. Keys masked.
 // Creates one sandbox account and agent; a $25 simulated deposit and a $5 payment (sandbox money only).
-// Needs scripts/sandbox-up.sh running and ffmpeg for the .mp4.
+// Needs the service running (pnpm dev:up) and ffmpeg for the .mp4.
 // Run: node --import tsx examples/developer/record-dashboard-journey.ts  -> examples/developer/recordings/dashboard-journey.mp4
 import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, rmSync } from "node:fs";
@@ -88,7 +88,7 @@ async function card(page: Page, title: string, sub: string, ms: number) {
 }
 
 // ---------- the recording ----------
-if ((await call("GET", "/healthz")).status !== 200) fail(`${baseUrl} is not up: scripts/sandbox-up.sh`);
+if ((await call("GET", "/healthz")).status !== 200) fail(`${baseUrl} is not up: pnpm dev:up`);
 
 rmSync(outDir + "raw-dash", { recursive: true, force: true });
 mkdirSync(outDir + "raw-dash", { recursive: true });

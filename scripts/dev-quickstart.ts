@@ -3,8 +3,8 @@
 //   2. a merchant account (mk_...)
 //   3. a $1.00 checkout created with the SDK and paid by that agent, so you see "paid" before writing any code
 // Keys go to .env.sandbox-keys (mode 600, git-ignored); nothing secret is printed.
-// Needs the sandbox service running (scripts/sandbox-up.sh) with ALLOW_SIMULATED_DEPOSITS=1 (the default there).
-// MOVES SANDBOX MONEY (a few dollars of Miden sandbox balance).
+// Needs the service running (pnpm dev:up) with ALLOW_SIMULATED_DEPOSITS=1 (the default there).
+// Moves a few dollars of sandbox money (mock balance, or Miden sandbox balance if MIDEN_* is set).
 // Run: node --import tsx scripts/dev-quickstart.ts [--url http://127.0.0.1:8787] [--fresh] [--no-pay]
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,7 @@ async function api<T = any>(method: string, path: string, token?: string, body?:
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    return fail(`cannot reach ${baseUrl}. Start the sandbox service first: scripts/sandbox-up.sh (needs MIDEN_CLIENT_ID, MIDEN_CLIENT_SECRET and MIDEN_UNIQUE_KEY in your shell).`);
+    return fail(`cannot reach ${baseUrl}. Start the service first: pnpm dev:up`);
   }
   return { status: res.status, data: (await res.json().catch(() => ({}))) as T };
 }
@@ -66,7 +66,7 @@ function saveKeys(k: Record<string, string>): void {
 
 // --- Is the service up, and is it the sandbox? ---
 const health = await api("GET", "/healthz");
-if (health.status !== 200) fail(`${baseUrl}/healthz answered ${health.status}. Is the sandbox service running? scripts/sandbox-up.sh`);
+if (health.status !== 200) fail(`${baseUrl}/healthz answered ${health.status}. Is the service running? pnpm dev:up`);
 
 let keys = flag("--fresh") ? {} : readKeys();
 
@@ -95,7 +95,7 @@ if (!agentOk) {
 
   const dep = await api("POST", "/api/me/simulate-deposit", user, { amountCents: 2_500 });
   if (dep.status !== 202) {
-    fail(`simulated deposit refused (${dep.status}: ${dep.data?.error ?? "no detail"}). The service must run with ALLOW_SIMULATED_DEPOSITS=1 against the Miden sandbox; scripts/sandbox-up.sh sets it.`);
+    fail(`simulated deposit refused (${dep.status}: ${dep.data?.error ?? "no detail"}). The service must run with ALLOW_SIMULATED_DEPOSITS=1 (pnpm dev:up sets it).`);
   }
   const funded = await until("the Miden top-up", async () => (await api("GET", "/api/me", user)).data, (d: any) => d.card.fundings.some((f: any) => f.status !== "reserved"));
   if (funded.card.fundings[0].status !== "completed") fail(`the card top-up did not complete: ${funded.card.fundings[0].status} ${funded.card.fundings[0].detail ?? ""}`);

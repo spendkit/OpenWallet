@@ -5,15 +5,29 @@
   "license": "Apache-2.0",
   "description": "Virtual cards for AI agents, funded with stablecoins, with pluggable card issuers (Miden and an in-memory mock today)",
   "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spendkit/OpenWallet.git"
+  },
+  "bugs": "https://github.com/spendkit/OpenWallet/issues",
+  "homepage": "https://github.com/spendkit/OpenWallet#readme",
   "engines": {
     "node": ">=20"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "start": "node --import tsx src/main.ts",
     "dev:up": "scripts/sandbox-up.sh",
+    "dev:down": "sh scripts/sandbox-down.sh",
     "dev:keys": "tsx scripts/dev-quickstart.ts",
+    "dev:keys:fresh": "tsx scripts/dev-quickstart.ts --fresh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test --test-concurrency=4 test/*.test.ts",
+    "circle:reconcile": "tsx scripts/circle-reconcile.ts",
     "swap:rehearse": "tsx scripts/swap-rehearsal.ts",
     "swap:sandbox-e2e": "tsx scripts/swap-sandbox-e2e.ts",
     "swap:live-test": "tsx scripts/swap-live-test.ts",

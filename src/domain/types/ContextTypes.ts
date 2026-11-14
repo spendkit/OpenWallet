@@ -76,5 +76,9 @@ export interface AppParams {
   /** Sandbox: agents pay through the provider's simulated authorization. */
   sandbox: boolean;
   simulatedDeposits: boolean;
+  /** Miden USD wallet low-balance alert, checked from the background tick. */
+  walletMonitor?: { check(): Promise<void> };
+  /** Keyed, de-duplicated alerts (webhook failures, reconcile errors, stuck top-ups). */
+  alerts?: import("../../lib/services/Alerter.js").Alerter;
   log: (msg: string) => void;
 }

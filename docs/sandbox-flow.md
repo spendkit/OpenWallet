@@ -1,6 +1,6 @@
 # Sandbox flow: KYC, handover to the agent, and the agent paying
 
-Status: documents the code as it stands on 2026-10-19 (`src/lib/interactors/CardholderInteractor.ts`, `src/adapters/onboarding/onboarding.ts`, `src/lib/services/AgentWallets.ts`). Mira is still building parts of this; where something is a placeholder or unverified it is marked **OPEN**. The service is **sandbox-only**: `src/main.ts` refuses to start unless `MIDEN_BASE_URL` contains `sandbox`.
+Status: documents the code as it stands on 2026-10-19 (`src/lib/interactors/CardholderInteractor.ts`, `src/adapters/onboarding/onboarding.ts`, `src/lib/services/AgentWallets.ts`). Parts of this are still being built; where something is a placeholder or unverified it is marked **OPEN**. The service is **sandbox-only**: `src/main.ts` refuses to start unless `MIDEN_BASE_URL` contains `sandbox`.
 
 ## The model in one paragraph
 
@@ -23,7 +23,7 @@ agent ──MCP /mcp or REST /agent/v1──► pay ──► policy + sub-balan
 ## Running it
 
 ```
-export MIDEN_CLIENT_ID=… MIDEN_CLIENT_SECRET=… MIDEN_UNIQUE_KEY=…     # already set in the office shell
+export MIDEN_CLIENT_ID=… MIDEN_CLIENT_SECRET=… MIDEN_UNIQUE_KEY=…     # only for the Miden provider; the mock needs none
 export DATABASE_URL=postgres://localhost/agent_cards                  # default if unset
 node --import tsx src/main.ts
 ```

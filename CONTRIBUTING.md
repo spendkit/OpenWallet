@@ -20,7 +20,7 @@ pnpm typecheck
 pnpm test
 ```
 
-Running the service itself needs Miden sandbox credentials; see [docs/getting-started.md](docs/getting-started.md).
+Running the service needs no accounts: `pnpm dev:up` uses the mock card provider. See [docs/getting-started.md](docs/getting-started.md); Miden-specific code needs Miden sandbox credentials.
 
 ## Pull requests
 

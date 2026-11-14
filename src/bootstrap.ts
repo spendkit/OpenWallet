@@ -8,6 +8,8 @@ import { ClaudeFormPlanner } from "./adapters/checkoutFillers/FormPlanner.js";
 import { BASE_SEPOLIA_USDC, ETHEREUM_SEPOLIA_USDC, jsonRpc } from "./adapters/deposits/BaseUsdcWatcher.js";
 import { CircleDeposits } from "./adapters/deposits/CircleDeposits.js";
 import { MockCardProvider } from "./adapters/providers/mock/MockCardProvider.js";
+import { Alerter } from "./lib/services/Alerter.js";
+import { WalletBalanceMonitor } from "./adapters/funding/WalletBalanceMonitor.js";
 import { MidenWalletFunding } from "./adapters/funding/MidenWalletFunding.js";
 import { UsdcPayoutRail } from "./adapters/payouts/UsdcPayoutRail.js";
 import { CardLifecycle } from "./adapters/virtualCards/CardLifecycle.js";
@@ -21,7 +23,7 @@ import type { CardIssuerPort, CardLifecyclePort } from "./domain/interfaces/Card
 import type { FundingSource } from "./domain/interfaces/FundingSource.js";
 import type { AppParams, WatchedNetwork } from "./domain/types/ContextTypes.js";
 import { MidenClient } from "./lib/clients/cardIssuing/miden/MidenClient.js";
-import { CircleClient } from "./lib/clients/circle/CircleClient.js";
+import { CircleClient, circleNetwork } from "./lib/clients/circle/CircleClient.js";
 import { swapConfigFromEnv } from "./lib/interactors/SwapInteractor.js";
 import { AgentWallets } from "./lib/services/AgentWallets.js";
 import { Ledger } from "./lib/services/Ledger.js";
@@ -52,13 +54,32 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
   // so a fresh clone runs with no external accounts.
   const providerName = env.CARD_PROVIDER ?? (env.MIDEN_CLIENT_ID ? "miden" : "mock");
   if (providerName !== "miden" && providerName !== "mock") throw new Error(`CARD_PROVIDER must be "miden" or "mock", got "${providerName}"`);
+  // APP_ENV=production is the one explicit switch to real money. Without it the service is sandbox-only and refuses
+  // a non-sandbox Miden host, so a stray MIDEN_BASE_URL can never move real funds.
+  if (env.APP_ENV !== undefined && env.APP_ENV !== "production" && env.APP_ENV !== "sandbox") throw new Error(`APP_ENV must be "production" or "sandbox", got "${env.APP_ENV}"`);
+  const production = env.APP_ENV === "production";
+  const SANDBOX_MIDEN_HOSTS = new Set(["sandbox-api.midencards.io", "sandbox-identityserver.midencards.io"]);
+  if (production) {
+    // No sandbox defaults in production: both URLs must be given, over https, and neither may be a sandbox host.
+    if (providerName !== "miden") throw new Error("APP_ENV=production needs CARD_PROVIDER=miden (the mock provider is for sandboxes)");
+    for (const k of ["MIDEN_BASE_URL", "MIDEN_TOKEN_URL"]) {
+      const v = env[k];
+      if (!v) throw new Error(`APP_ENV=production needs ${k} (the production Miden URL; there is no default)`);
+      const u = new URL(v);
+      if (u.protocol !== "https:") throw new Error(`${k} must be https in production`);
+      if (SANDBOX_MIDEN_HOSTS.has(u.host)) throw new Error(`APP_ENV=production but ${k} is a Miden sandbox host`);
+    }
+    // Refuse to start rather than quietly ignore a flag that would fake money.
+    if (env.ALLOW_SIMULATED_DEPOSITS === "1") throw new Error("ALLOW_SIMULATED_DEPOSITS=1 is not allowed with APP_ENV=production");
+    if (env.SWAP_STRIPE_TEST_CARD === "1") throw new Error("SWAP_STRIPE_TEST_CARD=1 is not allowed with APP_ENV=production");
+  }
   const baseUrl = env.MIDEN_BASE_URL ?? "https://sandbox-api.midencards.io/miden";
-  // Sandbox-only: the mock always is; Miden only against its sandbox host.
-  const sandbox = providerName === "mock" || new URL(baseUrl).host === "sandbox-api.midencards.io";
-  if (!sandbox) throw new Error("this service is sandbox-only: MIDEN_BASE_URL must be the Miden sandbox");
-  // Fake deposits only when asked for by name, and never against a non-sandbox provider.
-  const simulatedDeposits = env.ALLOW_SIMULATED_DEPOSITS === "1";
-  if (simulatedDeposits && !sandbox) throw new Error("ALLOW_SIMULATED_DEPOSITS=1 is only allowed in the sandbox");
+  const sandbox = !production;
+  if (sandbox && providerName === "miden" && !SANDBOX_MIDEN_HOSTS.has(new URL(baseUrl).host)) {
+    throw new Error("this service is sandbox-only unless APP_ENV=production: MIDEN_BASE_URL must be the Miden sandbox");
+  }
+  // Fake deposits only when asked for by name, and only in the sandbox.
+  const simulatedDeposits = sandbox && env.ALLOW_SIMULATED_DEPOSITS === "1";
   const chain: string = "base-sepolia";
 
   // ----- data -----
@@ -77,6 +98,8 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
   let lifecycle: CardLifecyclePort;
   let cards: CardIssuerPort;
   let funding: FundingSource;
+  let walletMonitor: WalletBalanceMonitor | undefined;
+  const alerts = new Alerter({ log, ...(env.ALERT_WEBHOOK_URL ? { webhookUrl: env.ALERT_WEBHOOK_URL } : {}) });
   if (providerName === "mock") {
     const mock = new MockCardProvider({ ...(vault ? { vault } : {}) });
     lifecycle = cards = funding = mock;
@@ -94,7 +117,10 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
     cards = new CardService(miden, funding, undefined, vault
       ? { vault, keys: { clientId: need("MIDEN_CLIENT_ID"), uniqueKey: need("MIDEN_UNIQUE_KEY") }, log }
       : undefined);
-    log("card provider: miden (sandbox)");
+    log(`card provider: miden (${production ? "PRODUCTION, real money" : "sandbox"})`);
+    const minUsd = Number(env.MIDEN_WALLET_MIN_USD ?? (production ? 100 : 0));
+    if (!Number.isFinite(minUsd) || minUsd < 0) throw new Error("MIDEN_WALLET_MIN_USD must be a non-negative number of dollars");
+    if (minUsd > 0) walletMonitor = new WalletBalanceMonitor({ miden, minUsd, log, ...(env.ALERT_WEBHOOK_URL ? { alertWebhookUrl: env.ALERT_WEBHOOK_URL } : {}) });
   }
   const wallets = new AgentWallets(ledger);
   const hd = HdDepositWallet.loadOrCreate(env.DEPOSIT_WALLET_FILE ?? ".sandbox-wallet.json");
@@ -107,9 +133,9 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
     ? new CircleClient({
         apiKey: env.CIRCLE_API_KEY, entitySecretHex: env.CIRCLE_ENTITY_SECRET,
         walletSetId: need("CIRCLE_WALLET_SET_ID"),
+        blockchain: circleNetwork(env), // throws unless key type and network agree (and CIRCLE_LIVE=1 for mainnet)
       })
     : undefined;
-  if (circle && !env.CIRCLE_API_KEY!.startsWith("TEST_API_KEY:")) throw new Error("this service is sandbox-only: CIRCLE_API_KEY must be a Circle TEST_API_KEY");
   const circleDeposits = circle
     ? new CircleDeposits({
         circle, ledger, addresses, log,
@@ -117,7 +143,7 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
         onDust: (d) => log(`dust ${d.dustBase} base units on ${d.txHash} (not credited)`),
       })
     : undefined;
-  if (circle) log("Circle deposits on: new deposit addresses are Circle wallets (BASE-SEPOLIA); webhook at /webhooks/circle");
+  if (circle) log(`Circle deposits on: new deposit addresses are Circle wallets (${circleNetwork(env)}); webhook at /webhooks/circle`);
   const circleOnly = circle !== undefined && env.CHAIN_WATCHER !== "1";
 
   // Chain watchers: Circle's test USDC on Base Sepolia, free public RPC. faucet.circle.com opens on Ethereum
@@ -178,6 +204,8 @@ export async function bootstrapApplication(env: NodeJS.ProcessEnv = process.env)
     allowLocalWebhooks: sandbox,
     sandbox,
     simulatedDeposits,
+    ...(walletMonitor ? { walletMonitor } : {}),
+    alerts,
     log,
   };
 

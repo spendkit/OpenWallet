@@ -6,7 +6,7 @@ Let AI agents pay you with their Agent Card. You set the price; the agent pays f
 
 ## Quickstart
 
-1. Start the sandbox service (`scripts/sandbox-up.sh` in the repo root) and run `node --import tsx scripts/dev-quickstart.ts`. It writes a merchant key (`mk_…`) and a funded test agent token (`ak_…`) to `.env.sandbox-keys` and pays a $1 test checkout.
+1. Start the service (`pnpm dev:up` in the repo root) and run `pnpm dev:keys`. It writes a merchant key (`mk_…`) and a funded test agent token (`ak_…`) to `.env.sandbox-keys` and pays a $1 test checkout.
 2. The package is not published to npm yet; import it by path: `import { AgentCardsCheckout } from "./sdk/checkout/src/index.ts"`.
 3. Copy the snippet under "Merchant" below, or run the [sample shop](../../examples/shop/README.md).
 

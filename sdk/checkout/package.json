@@ -13,11 +13,20 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spendkit/OpenWallet.git",
+    "directory": "sdk/checkout"
+  },
+  "bugs": "https://github.com/spendkit/OpenWallet/issues",
+  "homepage": "https://github.com/spendkit/OpenWallet/tree/main/sdk/checkout#readme",
+  "keywords": ["ai-agents", "payments", "virtual-cards", "mcp", "stablecoin"],
+  "files": ["dist", "README.md", "LICENSE"],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json"
   }
 }

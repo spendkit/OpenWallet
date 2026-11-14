@@ -8,7 +8,7 @@ import type { AppParams } from "./domain/types/ContextTypes.js";
 const errText = (e: unknown) => (e as Error).message;
 
 export async function startBackgroundWorkers(
-  params: Pick<AppParams, "ledger" | "addresses" | "watchedNetworks" | "log">,
+  params: Pick<AppParams, "ledger" | "addresses" | "watchedNetworks" | "log" | "walletMonitor" | "alerts">,
   app: AgentCardsApp,
 ): Promise<{ stop(): void }> {
   const { log } = params;
@@ -43,13 +43,36 @@ export async function startBackgroundWorkers(
   async function reconcileCircle(): Promise<void> {
     if (!app.circleDeposits || Date.now() - lastCircleSweep < 60_000) return;
     lastCircleSweep = Date.now();
-    const r = await app.circleDeposits.reconcile();
+    let r;
+    try {
+      r = await app.circleDeposits.reconcile();
+    } catch (e) {
+      await params.alerts?.raise("circle-reconcile", `Circle catch-up reconcile is failing: ${errText(e)}. Missed deposits will not be credited until it works.`);
+      throw e;
+    }
+    await params.alerts?.clear("circle-reconcile", "Circle catch-up reconcile works again.");
     if (r.credited > 0) log(`circle reconcile: credited ${r.credited} missed deposit(s)`);
     for (const i of r.ignored) {
       if (circleIgnoredLogged.has(i.id)) continue;
       circleIgnoredLogged.add(i.id);
       log(`circle reconcile: transfer ${i.id} to one of our addresses not credited (${i.reason})`);
     }
+  }
+
+  // A top-up row is 'reserved' only between the ledger reserve and the Miden answer; it normally settles within a
+  // tick. One that lingers means money is held and neither landed nor released. Checked at most once a minute.
+  const STUCK_FUNDING_MS = Number(process.env.STUCK_FUNDING_MINUTES || 15) * 60_000;
+  let lastFundingCheck = 0;
+  async function checkStuckFundings(): Promise<void> {
+    if (!params.alerts || Date.now() - lastFundingCheck < 60_000) return;
+    lastFundingCheck = Date.now();
+    const stuck = await app.cardholders.stuckFundings(STUCK_FUNDING_MS);
+    if (stuck.length === 0) {
+      await params.alerts.clear("stuck-funding", "No top-ups are stuck in 'reserved' any more.");
+      return;
+    }
+    const oldest = stuck[0]!;
+    await params.alerts.raise("stuck-funding", `${stuck.length} card top-up(s) stuck in 'reserved' for over ${Math.round(STUCK_FUNDING_MS / 60_000)} min (oldest ${oldest.fundingId}, card ${oldest.cardId}, ${oldest.amountCents} cents). See docs/runbook.md.`);
   }
 
   async function tick(): Promise<void> {
@@ -61,6 +84,8 @@ export async function startBackgroundWorkers(
     if (app.developers) void app.developers.deliverDue().catch((e) => log(`webhooks: ${errText(e)}`));
     await app.swaps?.reconcile().catch((e) => log(`swap reconcile: ${errText(e)}`));
     await reconcileCircle().catch((e) => log(`circle reconcile: ${errText(e)}`));
+    await checkStuckFundings().catch((e) => log(`stuck funding check: ${errText(e)}`));
+    await params.walletMonitor?.check().catch((e) => log(`wallet monitor: ${errText(e)}`));
     await app.checkouts?.sync().catch((e) => log(`checkouts: ${errText(e)}`));
     await app.payouts?.tick().catch((e) => log(`payouts: ${errText(e)}`));
   }

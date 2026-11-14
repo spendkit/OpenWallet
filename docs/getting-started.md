@@ -5,17 +5,19 @@ For developers who want to **accept payments from agents** (the checkout SDK) or
 ## What you need
 
 - Node 20+ and pnpm (`pnpm install` in the repo root).
-- The sandbox service running locally. That needs the Miden sandbox credentials (`MIDEN_CLIENT_ID`, `MIDEN_CLIENT_SECRET`, `MIDEN_UNIQUE_KEY`) in your shell and Postgres (the script below starts it with `brew services`). Ask whoever runs the project for the Miden credentials; they are never put in code or chat.
+- Postgres 16. The start script finds one for you: your own (`DATABASE_URL`), else Docker (`docker compose`), else Homebrew `postgresql@16`.
+- **No card-issuer account.** With no `MIDEN_*` set the service uses the built-in mock card provider (in memory, KYC approved at once, Visa test number). To use the Miden sandbox instead, export `MIDEN_CLIENT_ID`, `MIDEN_CLIENT_SECRET` and `MIDEN_UNIQUE_KEY` (see [card providers](card-providers.md)).
 - If you only need to try the SDK against a fake server, skip all of this: `examples/shop` has a test (`shop.test.ts`) that runs against an in-memory stand-in.
 
 ## 1. Start the service
 
 ```sh
-scripts/sandbox-up.sh        # Postgres + the service at http://127.0.0.1:8787
+pnpm install
+pnpm dev:up                  # Postgres + the service at http://127.0.0.1:8787 (PORT=... to change)
 curl -s http://127.0.0.1:8787/healthz
 ```
 
-Stop it with `kill $(cat .run/server.pid)`; the log is `.run/server.log`.
+Stop it with `pnpm dev:down`; the log is `.run/server.log`.
 
 ## 2. Get sandbox keys
 
@@ -33,7 +35,7 @@ This creates, in about a minute:
 
 They are written to `.env.sandbox-keys` (mode 600, git-ignored; nothing is printed). The script then has the agent pay a $1.00 checkout through the SDK, so you know the whole path works before you write code. It reuses earlier keys that still work; `--fresh` makes new ones, `--no-pay` skips the test payment, `--url` points at another server.
 
-It moves a few dollars of Miden sandbox money and uses a dummy identity for Card KYC. The simulated deposit needs `ALLOW_SIMULATED_DEPOSITS=1`, which `sandbox-up.sh` sets.
+It moves a few dollars of sandbox money (mock, or Miden if configured) and uses a dummy identity for Card KYC. The simulated deposit needs `ALLOW_SIMULATED_DEPOSITS=1`, which `pnpm dev:up` sets.
 
 Where each key comes from if you want to do it by hand: `mk_` from `POST /merchant/v1/signup` (or `AgentCardsCheckout.signup`), `ak_` from the owner dashboard at http://127.0.0.1:8787 (create an agent and give it a budget) or `POST /api/me/agents`. Both are shown once; only a hash is stored. Rotate with `POST /merchant/v1/key` (merchant) or `POST /api/me/token` (owner).
 
@@ -97,9 +99,9 @@ Then tell it: "pay the checkout at <checkoutUrl>". To watch an agent use MCP fro
 
 | You see | Usually means |
 | --- | --- |
-| `cannot reach http://127.0.0.1:8787` | The service is not running: `scripts/sandbox-up.sh`; check `.run/server.log` |
-| `sandbox-up.sh`: `missing MIDEN_CLIENT_ID` | The Miden credentials are not exported in this shell |
-| 401/403 from Miden in the service log | Credentials wrong, or this machine's IP is not whitelisted in the Miden dashboard (`scripts/sandbox-smoke.ts` checks it) |
+| `cannot reach http://127.0.0.1:8787` | The service is not running: `pnpm dev:up`; check `.run/server.log` |
+| `sandbox-up.sh`: `No Postgres found` | Start Docker, install `postgresql@16`, or export `DATABASE_URL` |
+| 401/403 from Miden in the service log (Miden mode only) | Credentials wrong, or this machine's IP is not whitelisted in the Miden dashboard (`scripts/sandbox-smoke.ts` checks it) |
 | `simulated deposit refused` | The service was started without `ALLOW_SIMULATED_DEPOSITS=1` |
 | `401` from `/merchant/v1/*` or `/agent/v1/*` | A wrong, rotated or revoked key. `dev-quickstart.ts --fresh` makes new ones |
 | `refusing to send a secret over plain http` | Your `baseUrl` is not localhost and not `https` |

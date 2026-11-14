@@ -410,6 +410,12 @@ export class CardholderInteractor {
 
   // ---------- funding: holding -> Miden card ----------
 
+  /** Top-ups still 'reserved' after `olderThanMs`, oldest first: for alerting. */
+  async stuckFundings(olderThanMs: number): Promise<{ fundingId: string; cardId: string; amountCents: number }[]> {
+    const cutoff = this.now().getTime() - olderThanMs;
+    return (await this.d.fundings.reserved()).filter((f) => f.createdAt.getTime() < cutoff);
+  }
+
   /**
    * Moves credited deposits onto each card with a Miden top-up. A row is written before the ledger
    * reserve and the Miden call share its id, so a crash anywhere is finished by the next run: the

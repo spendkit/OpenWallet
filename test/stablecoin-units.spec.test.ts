@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 /**
  * SPEC for the stablecoin base-unit -> ledger cents conversion. Implemented in src/lib/utils/units.ts.
  *
- * Proposed rule (agrees with Mira's "round down, log dust"):
+ * Proposed rule:
  *  - Input is a bigint of base units (or a decimal string parsed without floats). Never a JS number:
  *    1e6-scaled values lose precision above 2^53 base units (~9 billion USDC) and 0.1+0.2 style errors creep in.
  *  - cents = floor(base / 10^(decimals-2)); dust = base mod 10^(decimals-2). For 6 decimals: divisor 10_000.

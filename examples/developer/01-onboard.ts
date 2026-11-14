@@ -1,6 +1,6 @@
 // Demo 1: the whole developer path, headless. Sign up, create a user, hand them a connect link, then
 // (sandbox shortcut) do the user's KYC and deposit for them, create an agent with limits, fund it, and show the agent's wallet.
-// MOVES SANDBOX MONEY (a few dollars). Needs scripts/sandbox-up.sh running.
+// MOVES SANDBOX MONEY (a few dollars). Needs the service running (pnpm dev:up).
 // Run: node --import tsx examples/developer/01-onboard.ts   -> writes examples/developer/.env.developer-demo (git-ignored)
 import { call, developerKey, kycAsUser, newAgent, newUser, ok, say, saveState, simulatedDeposit } from "./lib.ts";
 

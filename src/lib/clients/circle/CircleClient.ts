@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, publicEncrypt, randomUUID, verify, constants } from "node:crypto";
-import { BASE_SEPOLIA_USDC, ETHEREUM_SEPOLIA_USDC } from "../../../adapters/deposits/BaseUsdcWatcher.js";
+import { BASE_USDC, BASE_SEPOLIA_USDC, ETHEREUM_SEPOLIA_USDC } from "../../../adapters/deposits/BaseUsdcWatcher.js";
 
 /**
  * Circle developer-controlled wallets as the deposit rail (sandbox): each card gets a Circle wallet created on
@@ -11,9 +11,26 @@ import { BASE_SEPOLIA_USDC, ETHEREUM_SEPOLIA_USDC } from "../../../adapters/depo
 
 export const CIRCLE_API = "https://api.circle.com";
 /** Circle blockchain id -> the ledger chain label the watcher rail already uses for that network. */
-export const CIRCLE_CHAINS: Record<string, string> = { "BASE-SEPOLIA": "base-sepolia", "ETH-SEPOLIA": "ethereum-sepolia" };
+export const CIRCLE_CHAINS: Record<string, string> = { BASE: "base", "BASE-SEPOLIA": "base-sepolia", "ETH-SEPOLIA": "ethereum-sepolia" };
 /** The only USDC contract credited per Circle blockchain: a token that merely calls itself "USDC" is not enough. */
-export const CIRCLE_USDC: Record<string, string> = { "BASE-SEPOLIA": BASE_SEPOLIA_USDC, "ETH-SEPOLIA": ETHEREUM_SEPOLIA_USDC };
+export const CIRCLE_USDC: Record<string, string> = { BASE: BASE_USDC, "BASE-SEPOLIA": BASE_SEPOLIA_USDC, "ETH-SEPOLIA": ETHEREUM_SEPOLIA_USDC };
+
+/**
+ * Which Circle environment this process talks to. A TEST_API_KEY only works on testnets and a live key only on
+ * mainnet, so the pairing is checked up front instead of failing (or worse, half-working) on the first call.
+ * Going live is deliberate: CIRCLE_NETWORK=BASE together with CIRCLE_LIVE=1 and a live key. Default is the sandbox.
+ */
+export function circleNetwork(env: { CIRCLE_API_KEY?: string; CIRCLE_NETWORK?: string; CIRCLE_LIVE?: string }): "BASE" | "BASE-SEPOLIA" {
+  const net = env.CIRCLE_NETWORK ?? "BASE-SEPOLIA";
+  if (net !== "BASE" && net !== "BASE-SEPOLIA") throw new Error("CIRCLE_NETWORK must be BASE-SEPOLIA (default) or BASE");
+  const isTestKey = (env.CIRCLE_API_KEY ?? "").startsWith("TEST_API_KEY:");
+  if (net === "BASE-SEPOLIA" && !isTestKey) throw new Error("CIRCLE_NETWORK is BASE-SEPOLIA but CIRCLE_API_KEY is not a TEST_API_KEY: a live key is only for CIRCLE_NETWORK=BASE");
+  if (net === "BASE") {
+    if (isTestKey) throw new Error("CIRCLE_NETWORK=BASE needs a live Circle API key, not a TEST_API_KEY");
+    if (env.CIRCLE_LIVE !== "1") throw new Error("CIRCLE_NETWORK=BASE moves real money: set CIRCLE_LIVE=1 to confirm");
+  }
+  return net;
+}
 /** Unknown notification key ids we will look up per minute, so an anonymous caller cannot make us spam Circle. */
 const KEY_LOOKUPS_PER_MIN = 20;
 const RECENT_PAGES = 10;
