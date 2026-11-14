@@ -43,6 +43,10 @@ Rules kept from the device side: a challenge is its own failure state; the revea
 | `SWAP_INSECURE_HOSTS` | none | http hosts, for the local fixture only |
 | `SWAP_RECEIPT_EMAIL` | owner's email | fallback receipt email |
 | `SWAP_STRIPE_TEST_CARD` | off | sandbox only: `1` pays Stripe **test-mode** links (`cs_test_...`, `buy.stripe.com/test_...`) with Stripe's 4242 test card instead of the vault. The vault is not opened, no card authorization is expected afterwards, and live links are unaffected. Refused at startup off the Miden sandbox. The agent's balance is still debited in our ledger although no card is charged, so in this mode a ledger debit is not proof of a card spend. A swap left unclear is never matched to a card authorization; after 30 minutes it goes to a person. Used by `examples/n8n/agent-pays-stripe-link.workflow.json`. |
+| `SWAP_TEST_HOSTS` | none | sandbox only, needs `SWAP_STRIPE_TEST_CARD=1`: exact hosts (http or https) of test shops whose checkouts are paid with the same 4242 test card and can be watched live. |
+| `SWAP_OPEN_HOSTS` | off | `1`: a public https checkout on a host that is **not** in `SWAP_ALLOWED_HOSTS` may be paid too, but only ever with a one-time card holding exactly the agreed amount (made for that payment, privacy mode or not). Hosts naming this machine or a private network (localhost, `.local`, `.internal`, private and link-local IPs) are refused. See "Unfamiliar checkouts". |
+| `SWAP_AI_FILL` | on when `ANTHROPIC_API_KEY` is set | `0` turns the model off: unfamiliar forms are then paid only when their labels are clear. |
+| `SWAP_AI_MODEL` | `claude-opus-5-5` | the model that maps unfamiliar forms. |
 
 Agent surfaces: MCP `pay_hosted_checkout` / `get_hosted_checkout_payment`; REST `POST /agent/v1/hosted-checkouts/pay`, `GET /agent/v1/hosted-checkouts[/sw_...]`.
 
@@ -115,3 +119,15 @@ Without a billing country and postal code on file, or if the form has no option 
 **Not tested**: that Paddle's real markup matches our selectors (field names and labels, button names, `data-testid` total markup are from published knowledge, not a live page), Paddle's bot checks, real 3-D Secure, and the tax behaviour of a real account.
 
 **To test on a real page for free**: use a Paddle sandbox account, create a transaction and open its checkout, then run the filler with the sandbox test card `4242 4242 4242 4242` and the exact tax-inclusive total.
+
+## Unfamiliar checkouts
+
+`AdaptiveFiller` (`AdaptiveFiller.ts`, `formScan.ts`, `FormPlanner.ts`) pays checkout pages none of the fillers above was written for. `RoutingFiller` sends it every page it has no filler for, but only when `SWAP_OPEN_HOSTS=1` or `SWAP_TEST_HOSTS` is set; otherwise such pages are refused before a browser opens, as before.
+
+1. The price comes first: an amount on a line labelled total (or the line after the label, or the pay button) must equal the agreed price, and nothing labelled total may be higher. If it doesn't match, nothing is typed. It is checked again after each "continue" and on the page that takes the card.
+2. **Labels:** each field's autocomplete token, then its name, id, placeholder and label (`cc-number`, "Card number", "CVC"...). A card number, a CVC, an expiry and exactly one pay button are needed, plus nothing required that we cannot fill. No model is involved.
+3. **Model** (only when the labels are not enough, and `ANTHROPIC_API_KEY` is set): `ClaudeFormPlanner` gets the controls (attributes and labels, never values) and a screenshot taken before any card data is typed. For each field it answers with a stand-in (`card_number`, `email`...), never a value. It can name a continue button for multi-step checkouts (at most 3 steps), or refuse the page (`cannotPay`: login, one-time code, odd price). The page counts as untrusted input. `checkPlan` rejects a plan that puts card data anywhere except a text input (or an expiry select), into a field the page labels as something else, outside the pay button's form, or into more than one field. It never ticks newsletter, save-card, subscription or add-on boxes.
+4. After the card is typed, nothing from the page is kept or sent: the result comes from the URL, frames and fixed wording (success, decline, 3-D Secure, captcha). No answer means unknown, so the money stays held, as for the other fillers.
+5. The browser context blocks requests to private hosts other than the start host.
+
+What this does not catch: a page that labels a card-shaped field innocently (for example "Reference") and steers the model to put the card number there. That is why an open host is paid only with a one-time card holding exactly the agreed amount: the worst case is that amount, once.

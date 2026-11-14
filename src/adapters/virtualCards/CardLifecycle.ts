@@ -1,21 +1,11 @@
 import type { MidenClient } from "../../lib/clients/cardIssuing/miden/MidenClient.js";
+import { CardProviderBusinessError } from "../../domain/errors/CardProviderErrors.js";
+import type { CardLifecyclePort, CardTransaction, IndividualKyc } from "../../domain/interfaces/CardIssuing.js";
+import { referenceFor } from "../funding/MidenWalletFunding.js";
+
+export type { CardTransaction };
 
 /** Poll-based reads for the card lifecycle, used instead of webhooks. Shapes are from docs/miden-api.md. */
-
-export interface CardTransaction {
-  id?: number;
-  cardId?: string;
-  transactionType?: string;
-  transactionStatus?: string;
-  transactionReference?: string;
-  transactionAmount?: number;
-  merchantName?: string;
-  merchantMcc?: string;
-  merchantMid?: string;
-  /** Sandbox shows UTC without a zone suffix, e.g. "2026-10-19T14:11:54.689346". */
-  transactionTime?: string;
-  authCode?: string;
-}
 
 interface Envelope {
   isSuccessful?: boolean;
@@ -24,7 +14,7 @@ interface Envelope {
 }
 
 /** Miden answered 2xx but said no (isSuccessful false or a non-success code): a definite refusal, not a timeout. */
-export class MidenBusinessError extends Error {
+export class MidenBusinessError extends CardProviderBusinessError {
   constructor(message: string) {
     super(message);
     this.name = "MidenBusinessError";
@@ -41,8 +31,29 @@ function check<T extends Envelope>(what: string, res: T): T {
 
 export type KycStatus = "Initiated" | "Pending" | "Approved" | "Rejected";
 
-export class CardLifecycle {
+export class CardLifecycle implements CardLifecyclePort {
   constructor(private readonly miden: MidenClient) {}
+
+  /** POST api/v1/cards/kyc-submit. Identity data goes straight to Miden and is never logged or kept. */
+  async submitKyc(reference: string, kyc: IndividualKyc): Promise<{ kycStatus?: string }> {
+    const res = await this.miden.request<Envelope & { kycStatus?: string }>(
+      "POST",
+      "/api/v1/cards/kyc-submit",
+      {
+        customerType: "Individual",
+        phone: kyc.phone,
+        email: kyc.email,
+        clientReference: reference,
+        individualKyc: {
+          firstName: kyc.firstName, lastName: kyc.lastName, dateOfBirth: kyc.dateOfBirth, idType: kyc.idType,
+          idNumber: kyc.idNumber, idFrontImage: kyc.idFrontImage, address: kyc.address,
+        },
+      },
+      { reference: referenceFor(`kyc:${reference}`) },
+    );
+    check("KYC submit", res);
+    return { kycStatus: res.kycStatus };
+  }
 
   /** GET api/v1/cards/kyc/client-reference/{clientReference}. `kycToken` is a credential: callers must not log it. */
   async kycStatus(clientReference: string): Promise<{ status: string; customerId?: string; kycToken?: string }> {
@@ -85,7 +96,7 @@ export class CardLifecycle {
    */
   async simulateAuthorization(
     args: { cardId: string; amountDollars: number; mcc?: string; merchantName?: string; approve?: boolean; mid?: string },
-    opts: { reference?: string } = {},
+    opts: { idempotencyKey?: string } = {},
   ): Promise<string | undefined> {
     const res = check(
       "simulated authorization",
@@ -108,7 +119,7 @@ export class CardLifecycle {
           mcc: args.mcc ?? "5734",
           country: "US",
         },
-      }, opts),
+      }, opts.idempotencyKey ? { reference: referenceFor(opts.idempotencyKey) } : {}),
     );
     return res.authorizationId;
   }

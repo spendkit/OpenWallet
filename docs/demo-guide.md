@@ -15,7 +15,7 @@ That IP must be on the whitelist in the Miden sandbox dashboard. Last known whit
 ## 1. Start the service
 
 ```
-cd /Volumes/External/agent-cards
+cd path/to/openwallet
 scripts/sandbox-up.sh                # Postgres + service on http://127.0.0.1:8787
 curl -s http://127.0.0.1:8787/healthz   # should print {"ok":true}
 ```

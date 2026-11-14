@@ -40,9 +40,8 @@ curl -s https://api.stripe.com/v1/checkout/sessions -u "$STRIPE_SANDBOX_SECRET_K
 
 and paste its `url` into the workflow with `amountUsd` 1. Tested on 2026-10-29: the run returned `PAID`, and Stripe's API showed the session `complete / paid`.
 
-## The demo (Stripe checkout link) and its video
+## The demo (Stripe checkout link)
 
-Video: [`docs/media/n8n-demo.mp4`](../../docs/media/n8n-demo.mp4) (24 s: the flow, Execute, then the final node showing `PAID` / Stripe `paid` / `complete`).
 
 Reproduce it from a clone (sandbox only, no real money):
 

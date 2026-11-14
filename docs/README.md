@@ -17,6 +17,7 @@ Written 2026-10-19 from the code in the working tree (Mira is still building par
 | [checkout-payouts.md](checkout-payouts.md) | Checkout, settlement, merchant payouts, and what blocks mainnet |
 | [ops.md](ops.md) | Runbooks: a checkout or payout held for review |
 | [production-gaps.md](production-gaps.md) | Not production-ready items and the numbered open-items list |
+| [card-providers.md](card-providers.md) | The card-issuing ports, the mock and Miden providers, adding another |
 | [miden-api.md](miden-api.md) | What the Miden Workspace API docs say and what the sandbox confirmed |
 
 The top-level [README](../README.md) has a short overview, configuration and layout.

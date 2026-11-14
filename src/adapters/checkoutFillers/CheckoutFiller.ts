@@ -42,6 +42,18 @@ export interface FillRequest {
   card: CardDetails;
   /** Receipt email for pages that require one (Stripe Checkout does). */
   email: string;
+  /**
+   * Live view of the attempt (steps and screen frames). Only ever set when the card is Stripe's public 4242 test card
+   * (SWAP_STRIPE_TEST_CARD on a test-mode link): with a real card, nothing from the page may be captured.
+   */
+  watch?: FillWatcher;
+}
+
+export interface FillWatcher {
+  /** A short, human-readable step, e.g. "Typing the card number". */
+  step(label: string): void;
+  /** One JPEG frame of the page, base64. */
+  frame(jpegBase64: string): void;
 }
 
 export interface CheckoutFiller {

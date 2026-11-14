@@ -2,22 +2,16 @@ import type { FundingReceipt, FundingSource, Stablecoin } from "../../domain/int
 import type { MidenClient } from "../../lib/clients/cardIssuing/miden/MidenClient.js";
 import { referenceFor } from "../funding/MidenWalletFunding.js";
 import { MidenBusinessError } from "./CardLifecycle.js";
+import type { AgentCard, AuthorizationResult, CardIssuerPort, CardholderKyc } from "../../domain/interfaces/CardIssuing.js";
+
+export type { AgentCard, AuthorizationResult, CardholderKyc };
 import { decryptSecureCardDetails, fetchFullCardDetails, type DetailKeys } from "../../lib/clients/cardIssuing/miden/cardDetails.js";
 import type { CardDetails, CardVault, CaptureSource } from "../cardVault/CardVault.js";
-import { evaluate, type SpendPolicy } from "../../lib/services/spendPolicy.js";
+import type { SpendPolicy } from "../../lib/services/spendPolicy.js";
+import { SpendTracker } from "../../lib/services/SpendTracker.js";
 
 /** A one-time card is set to terminate itself this many days after issue (Miden does not terminate cards on the day they are made). */
 export const ONE_TIME_TERMINATE_DAYS = 2;
-
-export type AuthorizationResult = { ok: true } | { ok: false; reason: string };
-
-export interface AgentCard {
-  id: string;
-  agentId: string;
-  policy: SpendPolicy;
-  /** Set when the service has a vault: whether the full card details are in it. */
-  detailsCaptured?: boolean;
-}
 
 /** Card-detail capture at issue: decrypt Miden's secureCardDetails and seal it into the vault. */
 export interface CaptureConfig {
@@ -25,12 +19,6 @@ export interface CaptureConfig {
   keys: DetailKeys;
   /** Never receives card data: only ids, last4 and scheme names. */
   log?: (msg: string) => void;
-}
-
-/** Output of Miden Card KYC (docs/miden-api.md). An agent cannot be the KYC subject: this is a verified person or business. */
-export interface CardholderKyc {
-  customerId: string;
-  kycToken: string;
 }
 
 interface IssueResponse {
@@ -44,16 +32,17 @@ interface IssueResponse {
  * Issues cards for agents and tops them up from stablecoins.
  * Issuance is POST api/v2/cards/issue (docs/miden-api.md); shapes are from the docs, UNCONFIRMED against the sandbox.
  */
-export class CardService {
-  /** Approved spend per card per UTC day, in memory only (lost on restart). */
-  private readonly spent = new Map<string, Map<string, number>>();
+export class CardService implements CardIssuerPort {
+  private readonly tracker: SpendTracker;
 
   constructor(
     private readonly miden: MidenClient,
     private readonly funding: FundingSource,
     private readonly now: () => Date = () => new Date(),
     private readonly capture?: CaptureConfig,
-  ) {}
+  ) {
+    this.tracker = new SpendTracker(now);
+  }
 
   /**
    * `clientReference` must be stable per card (not per agent): it is sent as both the
@@ -204,28 +193,8 @@ export class CardService {
     return this.funding.fund({ cardId: card.id, amountCents, asset, idempotencyKey });
   }
 
-  /**
-   * Checks a spend attempt against the card's policy and, if approved, records it
-   * against today's total. Synchronous, so concurrent attempts cannot both pass the
-   * daily limit within one process.
-   */
+  /** See SpendTracker: policy check plus today's running total, in memory. */
   authorize(card: AgentCard, amountCents: number, mcc?: string): AuthorizationResult {
-    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
-      return { ok: false, reason: "amount must be a positive whole number of cents" };
-    }
-    const day = this.now().toISOString().slice(0, 10);
-    const days = this.spent.get(card.id) ?? new Map<string, number>();
-    const spentTodayCents = days.get(day) ?? 0;
-    const result = evaluate(card.policy, { amountCents, mcc, spentTodayCents });
-    if (result.ok) {
-      days.set(day, spentTodayCents + amountCents);
-      // Keep every day seen until a newer one arrives, so a clock stepping back still finds its day;
-      // only drop days more than 2 behind the latest.
-      const latest = [...days.keys()].sort().at(-1)!;
-      const cutoff = new Date(Date.parse(latest) - 2 * 86_400_000).toISOString().slice(0, 10);
-      for (const d of days.keys()) if (d < cutoff) days.delete(d);
-      this.spent.set(card.id, days);
-    }
-    return result;
+    return this.tracker.authorize(card, amountCents, mcc);
   }
 }

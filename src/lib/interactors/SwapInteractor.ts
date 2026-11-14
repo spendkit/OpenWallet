@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { SwapRepository } from "../../domain/repositories/SwapRepository.js";
 import type { CheckoutSwap } from "../../domain/types/Entities.js";
-import type { CardTransaction } from "../../adapters/virtualCards/CardLifecycle.js";
+import type { CardTransaction } from "../../domain/interfaces/CardIssuing.js";
 import type { CardVault } from "../../adapters/cardVault/CardVault.js";
 import { SWAP_KEY_PREFIX, type AgentPrincipal, type ChargeOutcome, type Charger, type PayRequest, type SpendView } from "./CardholderInteractor.js";
 import { scrub, type CardDetails, type CheckoutFiller, type FillResult } from "../../adapters/checkoutFillers/CheckoutFiller.js";
+import type { SwapLiveFeed } from "../services/SwapLiveFeed.js";
+import { isPrivateHost } from "../../adapters/checkoutFillers/formScan.js";
 import { AgentCardsError, badRequestError, conflictError, forbiddenError, notFoundError } from "../../errors.js";
 
 /**
@@ -40,6 +42,17 @@ export interface SwapConfig {
    * opened, and there is no card authorization to match afterwards. Live links are never affected.
    */
   stripeTestCard?: boolean;
+  /**
+   * Sandbox only, with stripeTestCard (SWAP_TEST_HOSTS): exact hosts of test shops (e.g. the demo's local shop) whose
+   * checkouts are paid with the same 4242 test card. Allowed over http or https.
+   */
+  testHosts?: string[];
+  /**
+   * SWAP_OPEN_HOSTS=1: a public https checkout on a host that is not in allowedHosts may be paid too, but only ever with a
+   * one-time card holding exactly the agreed amount (made for the payment, whether or not the owner is in privacy
+   * mode). Hosts naming this machine or a private network are always refused.
+   */
+  openHosts?: boolean;
 }
 
 export interface SwapContext {
@@ -49,13 +62,15 @@ export interface SwapContext {
     resolveSwapSpend(spendId: string, out: { status: "approved"; auth?: string } | { status: "voided"; reason: string }): Promise<boolean>;
     noteSpend(spendId: string, reason: string): Promise<void>;
     /** The user's own card, or in privacy mode a one-time card made for this payment. */
-    chargeCardFor(p: AgentPrincipal, spendId: string, amountCents: number, opts: { needDetails: boolean }): Promise<string>;
+    chargeCardFor(p: AgentPrincipal, spendId: string, amountCents: number, opts: { needDetails: boolean; forceOneTime?: boolean }): Promise<string>;
     privacyMode(userId: string): Promise<boolean>;
   };
   vault: Pick<CardVault, "reveal" | "has" | "discard">;
   filler: CheckoutFiller;
   lifecycle: { transactions(cardId: string, type?: string, pageSize?: number): Promise<CardTransaction[]> };
   config: SwapConfig;
+  /** Live view for test-card swaps only (see SwapLiveFeed). */
+  live?: SwapLiveFeed;
   now?: () => Date;
   log?: (msg: string) => void;
 }
@@ -142,6 +157,8 @@ export function swapConfigFromEnv(env: NodeJS.ProcessEnv = process.env): SwapCon
     insecureHosts: list(env.SWAP_INSECURE_HOSTS),
     fallbackEmail: env.SWAP_RECEIPT_EMAIL,
     stripeTestCard: env.SWAP_STRIPE_TEST_CARD === "1",
+    testHosts: list(env.SWAP_TEST_HOSTS),
+    openHosts: env.SWAP_OPEN_HOSTS === "1",
   };
 }
 
@@ -160,9 +177,10 @@ export class SwapInteractor {
 
   async pay(p: AgentPrincipal, req: SwapRequest): Promise<SwapView> {
     const r = this.validate(req);
-    // Fail cleanly, before anything is reserved, when there is no card to swap in. A test link in test-card mode needs none.
-    const testCard = Boolean(this.d.config.stripeTestCard) && isStripeTestUrl(r.url.href);
-    if (!testCard && !(await this.d.vault.has(p.cardId))) {
+    // Fail cleanly, before anything is reserved, when there is no card to swap in. A test link in test-card mode needs
+    // none, and an open host gets a one-time card of its own.
+    const { testCard, oneTime } = this.cardFor(r.url.href);
+    if (!testCard && !oneTime && !(await this.d.vault.has(p.cardId))) {
       throw conflictError("this card's details are not on file, so it cannot pay hosted checkouts; the owner needs to have them captured again");
     }
     await this.insertOrBusy(p, r);
@@ -213,16 +231,41 @@ export class SwapInteractor {
     const host = url.host.toLowerCase();
     const secureOk = url.protocol === "https:" && c.allowedHosts.includes(host);
     const insecureOk = url.protocol === "http:" && (c.insecureHosts ?? []).includes(host);
-    if (!secureOk && !insecureOk) throw badRequestError(`checkout host ${host} is not supported (allowed: ${c.allowedHosts.join(", ")})`);
+    const testOk = Boolean(c.stripeTestCard) && /^https?:$/.test(url.protocol) && (c.testHosts ?? []).includes(host);
+    const openOk = Boolean(c.openHosts) && url.protocol === "https:" && !isPrivateHost(host);
+    if (!secureOk && !insecureOk && !testOk && !openOk) {
+      throw badRequestError(c.openHosts
+        ? `checkout host ${host} is not supported (only public https checkout pages can be paid)`
+        : `checkout host ${host} is not supported (allowed: ${c.allowedHosts.join(", ")})`);
+    }
     if (url.username || url.password) throw badRequestError("checkoutUrl must not contain credentials");
     return { url, amountCents, merchant: req.merchant.trim(), mcc, idempotencyKey: req.idempotencyKey.trim() };
+  }
+
+  /**
+   * Which card a checkout URL is paid with: Stripe's test card (a Stripe test link, or a test shop, in test-card mode),
+   * a one-time card (a host that is not on the allowlist: SWAP_OPEN_HOSTS), or else the vaulted card (or, in privacy
+   * mode, a one-time card anyway).
+   */
+  private cardFor(raw: string): { testCard: boolean; oneTime: boolean } {
+    const c = this.d.config;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return { testCard: false, oneTime: true };
+    }
+    const host = url.host.toLowerCase();
+    const testCard = Boolean(c.stripeTestCard) && (isStripeTestUrl(raw) || (c.testHosts ?? []).includes(host));
+    const vetted = (url.protocol === "https:" && c.allowedHosts.includes(host)) || (url.protocol === "http:" && (c.insecureHosts ?? []).includes(host));
+    return { testCard, oneTime: !testCard && !vetted };
   }
 
   private async drive(p: AgentPrincipal, row: CheckoutSwap): Promise<SwapView> {
     const swapId = row.swapId;
     const amountCents = row.amountCents;
     let fill: FillResult | undefined;
-    const testCard = Boolean(this.d.config.stripeTestCard) && isStripeTestUrl(row.checkoutUrl);
+    const { testCard, oneTime } = this.cardFor(row.checkoutUrl);
     const outcomeOf = (f: FillResult): ChargeOutcome => {
       if (f.outcome === "succeeded") return { kind: "approved" };
       if (f.outcome === "declined") return { kind: "refused", reason: "card declined at the checkout" };
@@ -235,13 +278,14 @@ export class SwapInteractor {
       let chargeCardId = p.cardId;
       try {
         if (testCard) {
-          this.log(`swap ${swapId}: Stripe test-mode link, paying with Stripe's test card (the vault is not opened)`);
+          this.log(`swap ${swapId}: test link or test shop, paying with Stripe's test card (the vault is not opened)`);
           await this.d.swaps.setChargeCard(swapId, TEST_CARD_ID);
           card = stripeTestCard();
         } else {
           // As late as possible: after the debit, right before the page. In privacy mode this is where the one-time
           // card is made, so a payment that never gets this far never costs a card.
-          chargeCardId = await this.d.app.chargeCardFor(p, spendId, amountCents, { needDetails: true });
+          // An open (not allowlisted) host always gets a one-time card holding exactly this amount.
+          chargeCardId = await this.d.app.chargeCardFor(p, spendId, amountCents, { needDetails: true, forceOneTime: oneTime });
           if (chargeCardId !== p.cardId) {
             await this.d.swaps.setChargeCard(swapId, chargeCardId);
           }
@@ -251,7 +295,15 @@ export class SwapInteractor {
             return { kind: "refused", reason: "this card's details are not on file; nothing was charged" };
           }
         }
-        fill = await this.d.filler.fill({ url: row.checkoutUrl, expectedAmountCents: amountCents, card, email: await this.receiptEmail(p) });
+        // The live view is for Stripe's public test card only: with a real card nothing from the page is captured.
+        const live = testCard ? this.d.live : undefined;
+        live?.publish(p.agentId, { type: "start", swapId, merchant: row.merchant, amountCents, url: row.checkoutUrl });
+        const watch = live && {
+          step: (label: string) => live.publish(p.agentId, { type: "step", swapId, label }),
+          frame: (jpeg: string) => live.publish(p.agentId, { type: "frame", swapId, jpeg }),
+        };
+        fill = await this.d.filler.fill({ url: row.checkoutUrl, expectedAmountCents: amountCents, card, email: await this.receiptEmail(p), ...(watch ? { watch } : {}) });
+        live?.publish(p.agentId, { type: "end", swapId, outcome: fill.outcome });
       } catch (e) {
         // The filler reports its own errors; this is the vault or something unexpected, before any submit.
         fill = { outcome: "error", submitted: false, detail: errText(e).slice(0, 200) };
@@ -357,7 +409,7 @@ export class SwapInteractor {
       {
         busySince: new Date(this.now().getTime() - GIVE_UP_AFTER_MS),
         // Privacy mode charges a card of its own per payment, so same-amount payments cannot be confused with each other.
-        skipBusyCheck: () => this.d.app.privacyMode(p.userId),
+        skipBusyCheck: async () => this.cardFor(r.url.href).oneTime || (await this.d.app.privacyMode(p.userId)),
       },
     );
     if (!inserted) {

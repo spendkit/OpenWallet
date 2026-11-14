@@ -1,6 +1,6 @@
 import type { FundingReceipt, Stablecoin } from "../../domain/interfaces/FundingSource.js";
 import type { SpendPolicy } from "./spendPolicy.js";
-import type { AgentCard, CardholderKyc, CardService } from "../../adapters/virtualCards/CardService.js";
+import type { AgentCard, CardholderKyc, CardIssuerPort } from "../../domain/interfaces/CardIssuing.js";
 
 export type Tier = "quick" | "full";
 
@@ -34,7 +34,7 @@ export interface TieredCard extends AgentCard {
 }
 
 /**
- * Every user completes their own Card KYC at signup and gets one real card under their own Miden customer.
+ * Every user completes their own Card KYC at signup and gets one real card under their own customer at the card provider.
  * The tier is how deep that KYC was: "quick" (fast check, low limits) or "full" (more verification, higher limits).
  * Funding past a quick user's lifetime cap is refused until they reach "full".
  */
@@ -43,11 +43,11 @@ export class TieredCardIssuer {
   private readonly funded = new Map<string, number>();
 
   constructor(
-    private readonly cards: CardService,
+    private readonly cards: Pick<CardIssuerPort, "issue" | "topUp" | "authorize">,
     private readonly tiers: Record<Tier, TierLimits> = DEFAULT_TIERS,
   ) {}
 
-  /** One card per user. The card's limits are the tier's caps (pushed to Miden as card limits). */
+  /** One card per user. The card's limits are the tier's caps (pushed to the provider as card limits). */
   async issue(userId: string, kyc: CardholderKyc, tier: Tier, clientReference: string): Promise<TieredCard> {
     const limits = this.tiers[tier];
     const policy = capPolicy(limits, { perTransactionCents: limits.perTransactionCents, dailyCents: limits.dailyCents });

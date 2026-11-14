@@ -48,8 +48,7 @@ async function setup(opts: { allowLocalWebhooks?: boolean; fetch?: typeof fetch;
   let clock = Date.now();
   const f = { kyc: "Approved" };
   const deps = {
-    miden: { request: async () => ({ isSuccessful: true, responseCode: "00", kycStatus: "Initiated" }) },
-    lifecycle: { kycStatus: async () => ({ status: f.kyc, customerId: "cust-1", kycToken: "kt" }), cardBalance: async () => 0, transactions: async () => [] },
+    lifecycle: { submitKyc: async () => ({ kycStatus: "Initiated" }), kycStatus: async () => ({ status: f.kyc, customerId: "cust-1", kycToken: "kt" }), cardBalance: async () => 0, transactions: async () => [] },
     cardIssuer: { issue: async (_a: string, policy: unknown) => ({ id: `card-${++cards}`, agentId: "x", policy }) },
     funding: { fund: async (_r: FundingRequest) => ({ id: "m1", status: "confirmed" as const }) },
   };

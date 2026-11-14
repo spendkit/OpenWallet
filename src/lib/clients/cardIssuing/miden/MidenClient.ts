@@ -1,3 +1,4 @@
+import { CardProviderApiError } from "../../../../domain/errors/CardProviderErrors.js";
 import { newReference, sign } from "./signature.js";
 
 export interface MidenConfig {
@@ -27,15 +28,15 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): MidenConfig
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Non-2xx response from Miden. `body` is the raw response text. */
-export class MidenApiError extends Error {
+export class MidenApiError extends CardProviderApiError {
   constructor(
     readonly method: string,
     readonly path: string,
-    readonly status: number,
-    readonly body: string,
+    status: number,
+    body: string,
   ) {
     // The body stays on `.body`, out of `.message`: an error body may echo request data (PII, kycToken) into logs.
-    super(`Miden ${method} ${path} failed: ${status}`);
+    super(`Miden ${method} ${path} failed: ${status}`, status, body);
     this.name = "MidenApiError";
   }
 }

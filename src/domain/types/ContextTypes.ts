@@ -6,9 +6,7 @@ import type { CardVault } from "../../adapters/cardVault/CardVault.js";
 import type { CheckoutFiller } from "../../adapters/checkoutFillers/CheckoutFiller.js";
 import type { CircleDeposits } from "../../adapters/deposits/CircleDeposits.js";
 import type { CursorStore, Rpc } from "../../adapters/deposits/BaseUsdcWatcher.js";
-import type { CardLifecycle } from "../../adapters/virtualCards/CardLifecycle.js";
-import type { CardService } from "../../adapters/virtualCards/CardService.js";
-import type { MidenClient } from "../../lib/clients/cardIssuing/miden/MidenClient.js";
+import type { CardIssuerPort, CardLifecyclePort } from "../interfaces/CardIssuing.js";
 import type { PayoutRail } from "../../lib/interactors/PayoutInteractor.js";
 import type { SwapConfig } from "../../lib/interactors/SwapInteractor.js";
 import type { AgentWallets } from "../../lib/services/AgentWallets.js";
@@ -41,10 +39,9 @@ export interface AppParams {
   ledger: Ledger;
   addresses: DepositAddressRepository;
 
-  // ----- card issuing (Miden) -----
-  miden: MidenClient;
-  lifecycle: CardLifecycle;
-  cards: CardService;
+  // ----- card issuing (the provider chosen in bootstrap: Miden or the built-in mock) -----
+  lifecycle: CardLifecyclePort;
+  cards: CardIssuerPort;
   funding: FundingSource;
   tiers: Record<Tier, TierLimits>;
   /** Card details vault; without it cards issue but hosted checkouts cannot be paid. */
@@ -76,7 +73,7 @@ export interface AppParams {
   allowLocalWebhooks: boolean;
 
   // ----- environment -----
-  /** Miden sandbox: agents pay through Miden's simulated authorization. */
+  /** Sandbox: agents pay through the provider's simulated authorization. */
   sandbox: boolean;
   simulatedDeposits: boolean;
   log: (msg: string) => void;

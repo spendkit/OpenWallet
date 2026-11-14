@@ -11,16 +11,13 @@ import type { Agent, Card, Spend } from "../../domain/types/Entities.js";
 import type { OpenSpendResult } from "../../domain/repositories/SpendRepository.js";
 import type { FundingStatus } from "../../domain/repositories/FundingRepository.js";
 import type { OneTimeCardStatus } from "../../domain/repositories/OneTimeCardRepository.js";
-import { MidenBusinessError, type CardLifecycle, type CardTransaction } from "../../adapters/virtualCards/CardLifecycle.js";
+import { CardProviderApiError, DuplicateReferenceError, isDefiniteRefusal, providerMessage } from "../../domain/errors/CardProviderErrors.js";
+import type { CardIssuerPort, CardLifecyclePort, CardTransaction, IndividualKyc } from "../../domain/interfaces/CardIssuing.js";
 import { evaluate, type SpendPolicy } from "../services/spendPolicy.js";
-import type { CardService } from "../../adapters/virtualCards/CardService.js";
 import { capPolicy, type Tier, type TierLimits } from "../services/tiers.js";
-import { MidenDuplicateReferenceError, referenceFor } from "../../adapters/funding/MidenWalletFunding.js";
 import type { FundingSource } from "../../domain/interfaces/FundingSource.js";
 import { accounts, LedgerError, type Ledger, type LedgerTransaction } from "../services/Ledger.js";
 import { parseSimDeposit, SIM_DEPOSIT_PREFIX } from "../../adapters/deposits/simDeposit.js";
-import { MidenApiError, type MidenClient } from "../clients/cardIssuing/miden/MidenClient.js";
-import type { IndividualKyc } from "../../adapters/onboarding/onboarding.js";
 import { AgentCardsError, badGatewayError, badRequestError, conflictError, forbiddenError, notFoundError, tooManyRequestsError, unavailableError, unprocessableError } from "../../errors.js";
 
 export interface CardholderContext {
@@ -31,15 +28,14 @@ export interface CardholderContext {
   fundings: FundingRepository;
   oneTimeCards: OneTimeCardRepository;
   ledger: Ledger;
-  miden: MidenClient;
-  lifecycle: CardLifecycle;
-  cardIssuer: Pick<CardService, "issue" | "issueOneTime">;
+  lifecycle: CardLifecyclePort;
+  cardIssuer: Pick<CardIssuerPort, "issue" | "issueOneTime">;
   funding: FundingSource;
   wallets: AgentWallets;
   addresses: DepositAddressRepository;
   /**
    * The deposit-address provider: the address for a unique index. Our HD wallet today (sync); a custody
-   * provider such as Utila would call its API here (hence async), keyed by the same index.
+   * provider would call its API here (hence async), keyed by the same index.
    */
   deriveAddress: (index: number) => string | Promise<string>;
   tiers: Record<Tier, TierLimits>;
@@ -273,27 +269,11 @@ export class CardholderInteractor {
     const kyc = validateKyc(input);
     // A fresh reference per attempt, so a resubmission after rejection is a new Miden request.
     const reference = `kyc-${userId}-${randomBytes(3).toString("hex")}`;
-    const res = await this.d.miden.request<{ isSuccessful?: boolean; responseCode?: string; responseMessage?: string; kycStatus?: string }>(
-      "POST",
-      "/api/v1/cards/kyc-submit",
-      {
-        customerType: "Individual",
-        phone: kyc.phone,
-        email: kyc.email,
-        clientReference: reference,
-        individualKyc: {
-          firstName: kyc.firstName, lastName: kyc.lastName, dateOfBirth: kyc.dateOfBirth, idType: kyc.idType,
-          idNumber: kyc.idNumber, idFrontImage: kyc.idFrontImage, address: kyc.address,
-        },
-      },
-      { reference: referenceFor(`kyc:${reference}`) },
-    ).catch((e) => {
-      if (e instanceof MidenApiError) throw unprocessableError(`Miden rejected the KYC submission: ${midenMessage(e)}`);
+    const res = await this.d.lifecycle.submitKyc(reference, kyc).catch((e) => {
+      if (e instanceof CardProviderApiError) throw unprocessableError(`KYC submission rejected: ${providerMessage(e)}`);
+      if (isDefiniteRefusal(e)) throw unprocessableError(`KYC submission rejected: ${errText(e)}`);
       throw e;
     });
-    if (res.isSuccessful !== true || (res.responseCode !== "000" && res.responseCode !== "00")) {
-      throw unprocessableError(`Miden rejected the KYC submission: ${res.responseMessage ?? res.responseCode ?? "unknown error"}`);
-    }
     const status = res.kycStatus ?? "Initiated";
     await this.d.users.setKycSubmission(userId, reference, status);
     // The submission is recorded; a failed status read is retried by the background poller.
@@ -484,13 +464,13 @@ export class CardholderInteractor {
         detail = `miden ${receipt.id}`;
       }
     } catch (e) {
-      if (e instanceof MidenDuplicateReferenceError) {
+      if (e instanceof DuplicateReferenceError) {
         // Miden has seen this Reference, which does not prove the top-up succeeded: look for it.
         await this.findLostFunding(fundingId, cardId, amountCents);
         return;
-      } else if (e instanceof MidenApiError && e.status >= 400 && e.status < 500 && e.status !== 429) {
+      } else if (e instanceof CardProviderApiError && isDefiniteRefusal(e)) {
         landed = false;
-        detail = midenMessage(e);
+        detail = providerMessage(e);
       } else {
         this.log(`funding ${fundingId} will retry: ${errText(e)}`);
         return; // indeterminate: stays reserved, retried with the same Reference
@@ -638,9 +618,10 @@ export class CardholderInteractor {
    * call, so the same spend never gets two cards and a crash mid-issue is flagged, not guessed at.
    * Throws an AgentCardsError when no card could be made; the caller then undoes the debit (nothing was charged).
    * `needDetails`: also seal the card's details into the vault (a hosted-checkout fill needs them; the simulator does not).
+   * `forceOneTime`: a one-time card even outside privacy mode (a checkout on a host that is not on the swap allowlist).
    */
-  async chargeCardFor(p: AgentPrincipal, spendId: string, amountCents: number, opts: { needDetails: boolean }): Promise<string> {
-    if (!(await this.privacyMode(p.userId))) return p.cardId;
+  async chargeCardFor(p: AgentPrincipal, spendId: string, amountCents: number, opts: { needDetails: boolean; forceOneTime?: boolean }): Promise<string> {
+    if (!opts.forceOneTime && !(await this.privacyMode(p.userId))) return p.cardId;
     const prior = await this.d.oneTimeCards.findBySpend(spendId);
     if (prior?.status === "ready" && prior.cardId) return prior.cardId;
     // Miden loads at least $1 on a Lite card, so a smaller payment would park the rest of a dollar on a single-swipe card.
@@ -674,7 +655,7 @@ export class CardholderInteractor {
       out = await this.d.cardIssuer.issueOneTime({ customerId: kyc.customerId, kycToken: kyc.kycToken }, amountCents, `ot-${spendId}`, { capture: opts.needDetails });
     } catch (e) {
       if (isDefiniteRefusal(e)) {
-        const why = e instanceof MidenApiError ? midenMessage(e) : errText(e);
+        const why = e instanceof CardProviderApiError ? providerMessage(e) : errText(e);
         await mark("failed", why.slice(0, 200));
         throw unprocessableError(`could not make a one-time card (${why}); nothing was charged`);
       }
@@ -841,13 +822,13 @@ export class CardholderInteractor {
     try {
       const authId = await this.d.lifecycle.simulateAuthorization(
         { cardId, amountDollars: r.amountCents / 100, mcc: r.mcc, merchantName: r.merchant, mid: midFor(spendId) },
-        { reference: referenceFor(`auth:${spendId}`) },
+        { idempotencyKey: `auth:${spendId}` },
       );
       return finish("approved", null, { seq: verdict.tx.seq, auth: authId ?? undefined });
     } catch (e) {
       if (isDefiniteRefusal(e)) {
         await this.d.wallets.voidSpend(spendId, verdict.tx);
-        return finish("voided", `card declined: ${e instanceof MidenApiError ? midenMessage(e) : errText(e)}`);
+        return finish("voided", `card declined: ${e instanceof CardProviderApiError ? providerMessage(e) : errText(e)}`);
       }
       // We cannot tell whether the card was charged. Keep the money held; never re-send (the mock is not idempotent).
       this.log(`spend ${spendId}: card answer lost, reconciling later: ${errText(e)}`);
@@ -995,12 +976,6 @@ export class CardholderInteractor {
   }
 }
 
-/** The card said no for certain (vs a timeout, 429 or 5xx, where it may have been charged). */
-function isDefiniteRefusal(e: unknown): boolean {
-  if (e instanceof MidenBusinessError) return true;
-  return e instanceof MidenApiError && e.status >= 400 && e.status < 500 && e.status !== 429;
-}
-
 /** Owner-chosen agent limits must fit the card's and make sense together; say so instead of silently capping. */
 function checkAgentLimits(p: SpendPolicy, card: Pick<Card, "perTxnCents" | "dailyCents">): void {
   if (p.perTransactionCents > card.perTxnCents) throw badRequestError(`per-payment limit can be at most ${usd(card.perTxnCents)}, the card's limit`);
@@ -1057,15 +1032,6 @@ function validateKyc(k: Partial<IndividualKyc>): IndividualKyc {
     idNumber: t(k.idNumber, "idNumber"), idFrontImage: image, phone: t(k.phone, "phone"), email: t(k.email, "email"),
     address: { address1: t(a.address1, "address1"), city: t(a.city, "city"), state: t(a.state, "state"), zipcode: t(a.zipcode, "zipcode"), country: t(a.country, "country") },
   };
-}
-
-function midenMessage(e: MidenApiError): string {
-  try {
-    const b = JSON.parse(e.body) as { responseMessage?: string; message?: string; responseCode?: string };
-    return `${b.responseCode ? b.responseCode + " " : ""}${b.responseMessage ?? b.message ?? `HTTP ${e.status}`}`;
-  } catch {
-    return `HTTP ${e.status}`;
-  }
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));

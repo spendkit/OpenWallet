@@ -29,7 +29,7 @@ function fixture(kycStatus: string, failIssueFirst = false) {
     },
   } as unknown as MidenClient;
   const issuer = new TieredCardIssuer(new CardService(miden, { fund: async () => ({ id: "r", status: "pending" }) }));
-  return { calls, onboarding: new Onboarding(miden, new CardLifecycle(miden), issuer), issues: () => issues };
+  return { calls, onboarding: new Onboarding(new CardLifecycle(miden), issuer), issues: () => issues };
 }
 
 test("submitKyc sends a stable clientReference and the identity fields", async () => {

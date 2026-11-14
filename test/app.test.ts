@@ -49,8 +49,8 @@ function fakeMiden() {
     chargedOnHang: true,
   };
   const deps = {
-    miden: { request: async () => ({ isSuccessful: true, responseCode: "00", kycStatus: "Initiated" }) },
     lifecycle: {
+      submitKyc: async () => ({ kycStatus: "Initiated" }),
       kycStatus: async () => ({ status: f.kyc, customerId: "cust-1", kycToken: "kt" }),
       cardBalance: async () => 0,
       simulateAuthorization: async (a: { cardId: string; amountDollars: number; merchantName?: string; mid?: string }) => {

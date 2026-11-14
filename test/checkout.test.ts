@@ -42,8 +42,8 @@ function fakeMiden() {
     txns: [] as Record<string, unknown>[],
   };
   const deps = {
-    miden: { request: async () => ({ isSuccessful: true, responseCode: "00", kycStatus: "Initiated" }) },
     lifecycle: {
+      submitKyc: async () => ({ kycStatus: "Initiated" }),
       kycStatus: async () => ({ status: "Approved", customerId: "cust-1", kycToken: "kt" }),
       cardBalance: async () => 0,
       simulateAuthorization: async (a: { cardId: string; amountDollars: number; merchantName?: string; mcc?: string; mid?: string }) => {

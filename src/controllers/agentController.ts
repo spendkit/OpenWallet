@@ -65,3 +65,19 @@ export const getHostedCheckout = (app: AgentCardsApp) =>
   createControllerMethod(async (req, res) => {
     sendJson(res, 200, await requireSwaps(app).get(agentOf(req), req.params.swapId!));
   });
+
+/**
+ * Server-sent events: live view (steps and JPEG frames) of this agent's hosted-checkout payments made with Stripe's
+ * test card. Sandbox demo only: 404 unless SWAP_STRIPE_TEST_CARD=1.
+ */
+export const watchHostedCheckouts = (app: AgentCardsApp) =>
+  createControllerMethod(async (req, res) => {
+    if (!app.swapLive) return sendJson(res, 404, { error: "live view is only available with SWAP_STRIPE_TEST_CARD=1 (sandbox)" });
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+    res.write(": live\n\n");
+    const off = app.swapLive.subscribe(agentOf(req).agentId, (e) => res.write(`data: ${JSON.stringify(e)}\n\n`));
+    const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
+    await new Promise<void>((resolve) => req.on("close", () => resolve()));
+    clearInterval(ping);
+    off();
+  });

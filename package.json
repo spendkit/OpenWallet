@@ -1,9 +1,9 @@
 {
-  "name": "agent-cards",
+  "name": "openwallet",
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Virtual cards for AI agents, funded with stablecoins, on the Miden Workspace API",
+  "description": "Virtual cards for AI agents, funded with stablecoins, with pluggable card issuers (Miden and an in-memory mock today)",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -35,6 +35,7 @@
     "zod": "^4.6.7"
   },
   "optionalDependencies": {
+    "@anthropic-ai/sdk": "^1.5.0",
     "playwright-core": "1.59.0"
   }
 }

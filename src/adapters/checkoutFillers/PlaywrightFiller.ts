@@ -1,5 +1,5 @@
 import type { Browser, Frame, Page } from "playwright-core";
-import { parseUsdCents, type CheckoutFiller, type FillRequest, type FillResult } from "./CheckoutFiller.js";
+import { parseUsdCents, type CheckoutFiller, type FillRequest, type FillResult, type FillWatcher } from "./CheckoutFiller.js";
 
 /**
  * Fills a Stripe Checkout hosted page (checkout.stripe.com/c/pay/cs_...) in headless Chromium.
@@ -59,7 +59,12 @@ export class PlaywrightFiller implements CheckoutFiller {
     let submitted = false;
     try {
       const page = await context.newPage();
-      return await this.run(page, req, () => (submitted = true));
+      if (req.watch) await startScreencast(page, req.watch);
+      const result = await this.run(page, req, () => (submitted = true));
+      req.watch?.step(outcomeLabel(result));
+      // Hold the last frame on screen for a moment so a viewer sees the result page.
+      if (req.watch) await page.waitForTimeout(1_500).catch(() => undefined);
+      return result;
     } catch (e) {
       return { outcome: "error", submitted, detail: cardFree(e, req) };
     } finally {
@@ -75,6 +80,17 @@ export class PlaywrightFiller implements CheckoutFiller {
     const cardField = page.locator(SEL.cardNumber).first();
     // Real Stripe Checkout sometimes never renders in headless Chromium (its bot scoring runs on load). Nothing has
     // been typed yet, so one fresh load is safe.
+    const w = req.watch;
+    /** Plain fill normally; with a viewer, highlight the field and type it key by key so it can be watched. */
+    const put = async (l: ReturnType<Page["locator"]>, value: string, label: string, typed = value) => {
+      if (!w) return l.fill(value);
+      w.step(label);
+      await l.evaluate((el: HTMLElement) => { el.style.outline = "3px solid #635bff"; el.style.outlineOffset = "2px"; }).catch(() => undefined);
+      await l.fill("");
+      await l.pressSequentially(typed, { delay: 55 });
+      await l.evaluate((el: HTMLElement) => { el.style.outline = ""; }).catch(() => undefined);
+    };
+    w?.step(`Opening the checkout page (${startHost})`);
     let pageAmountCents: number | undefined;
     for (let attempt = 0; attempt < 2 && pageAmountCents === undefined; attempt++) {
       if (attempt === 0) await page.goto(req.url, { waitUntil: "domcontentloaded", timeout: loadMs });
@@ -95,6 +111,7 @@ export class PlaywrightFiller implements CheckoutFiller {
       return { outcome: "amount_mismatch", submitted: false, pageAmountCents, detail: `page total ${usd(pageAmountCents)}, expected ${usd(req.expectedAmountCents)}` };
     }
 
+    w?.step(`Page total is ${usd(pageAmountCents)}, the agreed price: OK to fill`);
     // Some sessions show payment methods as an accordion; card must be opened first.
     const accordion = page.locator(SEL.cardAccordion).first();
     if ((await accordion.count()) > 0 && !(await cardField.isVisible().catch(() => false))) {
@@ -107,12 +124,13 @@ export class PlaywrightFiller implements CheckoutFiller {
 
     const c = req.card;
     const email = page.locator(SEL.email).first();
-    if (await isEditable(email)) await email.fill(req.email);
-    await cardField.fill(digits(c.pan));
-    await page.locator(SEL.cardExpiry).first().fill(`${pad2(c.expMonth)} / ${String(c.expYear).slice(-2)}`);
-    await page.locator(SEL.cardCvc).first().fill(digits(c.cvv));
+    if (await isEditable(email)) await put(email, req.email, "Typing the receipt email");
+    await put(cardField, digits(c.pan), "Typing the card number");
+    const yy = String(c.expYear).slice(-2);
+    await put(page.locator(SEL.cardExpiry).first(), `${pad2(c.expMonth)} / ${yy}`, "Typing the expiry date", `${pad2(c.expMonth)}${yy}`);
+    await put(page.locator(SEL.cardCvc).first(), digits(c.cvv), "Typing the CVC");
     const name = page.locator(SEL.name).first();
-    if (await isEditable(name)) await name.fill(c.nameOnCard?.trim() || "Card Holder");
+    if (await isEditable(name)) await put(name, c.nameOnCard?.trim() || "Card Holder", "Typing the cardholder name");
     const addr = c.billingAddress;
     const country = page.locator(SEL.country).first();
     if ((await country.count()) > 0) {
@@ -125,7 +143,7 @@ export class PlaywrightFiller implements CheckoutFiller {
     // Choosing a country can re-render the address block; give it a moment before looking for its fields.
     await page.waitForTimeout(300);
     const postal = page.locator(SEL.postal).first();
-    if (await isEditable(postal)) await postal.fill(c.billingZip ?? "");
+    if (await isEditable(postal)) await put(postal, c.billingZip ?? "", "Typing the billing ZIP");
     // Sessions that collect a full billing address show these. Without one on file, stop before paying.
     const line1 = page.locator(SEL.line1).first();
     if (await line1.isVisible().catch(() => false)) {
@@ -156,6 +174,7 @@ export class PlaywrightFiller implements CheckoutFiller {
     }
     if (await captchaShown(page)) return { outcome: "captcha", submitted: false, pageAmountCents, detail: "bot check shown before submit" };
     markSubmitted();
+    w?.step("Pressing Pay");
     await submit.click({ timeout: 10_000 });
     return this.watch(page, startHost, pageAmountCents);
   }
@@ -182,6 +201,23 @@ export class PlaywrightFiller implements CheckoutFiller {
     }
     return done("error", "no result shown before the timeout; the charge state is unknown");
   }
+}
+
+/** Streams the page to a viewer as JPEG frames over the Chrome DevTools screencast. Ends with the context. */
+export async function startScreencast(page: Page, watch: FillWatcher): Promise<void> {
+  const cdp = await page.context().newCDPSession(page).catch(() => undefined);
+  if (!cdp) return;
+  cdp.on("Page.screencastFrame", (f: { data: string; sessionId: number }) => {
+    watch.frame(f.data);
+    void cdp.send("Page.screencastFrameAck", { sessionId: f.sessionId }).catch(() => undefined);
+  });
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 1000, maxHeight: 900, everyNthFrame: 1 }).catch(() => undefined);
+}
+
+export function outcomeLabel(r: FillResult): string {
+  if (r.outcome === "succeeded") return "Payment succeeded";
+  if (r.outcome === "declined") return "The card was declined";
+  return `Stopped: ${r.outcome.replace(/_/g, " ")}${r.detail ? ` (${r.detail})` : ""}`;
 }
 
 export function hasFrame(page: Page, re: RegExp): boolean {

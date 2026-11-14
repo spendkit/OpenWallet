@@ -108,7 +108,7 @@ function render() {
 
 function showLoggedOut() {
   view = "out"; kycView = null; built = false; agentEls.clear();
-  $("#who").innerHTML = "";
+  setHTML($("#who"), ""); // through setHTML so its cache is cleared, else logging back in skips redrawing #logout
   root.innerHTML = `<div class="auth">
     <div>
       <span class="badge accent"><span class="dot"></span>Sandbox · testnet money only</span>

@@ -17,6 +17,7 @@ import { cardFree, PlaywrightFiller } from "../src/adapters/checkoutFillers/Play
 import { startCheckoutFixture, type CheckoutFixture } from "../src/adapters/checkoutFillers/fixtures/stripeFixture.js";
 import { isStripeTestUrl, parseCardTime, SwapInteractor, swapConfigFromEnv, type SwapConfig } from "../src/lib/interactors/SwapInteractor.js";
 import { AgentCardsError } from "../src/errors.js";
+import { SwapLiveFeed, type SwapLiveEvent } from "../src/lib/services/SwapLiveFeed.js";
 
 const TEST_CARD: CardDetails = { pan: "4242424242424242", cvv: "123", expMonth: 12, expYear: 2030, nameOnCard: "Ada Test", billingZip: "94000" };
 const card = (): CardDetails => ({ ...TEST_CARD });
@@ -48,7 +49,8 @@ test("swap: scrub blanks every field; cardFree strips card values from error tex
 
 test("swap: config defaults to off, Stripe only, $10 cap", () => {
   const c = swapConfigFromEnv({});
-  assert.deepEqual(c, { enabled: false, maxAmountCents: 1000, allowedHosts: ["checkout.stripe.com", "buy.stripe.com"], insecureHosts: [], fallbackEmail: undefined, stripeTestCard: false });
+  assert.deepEqual(c, { enabled: false, maxAmountCents: 1000, allowedHosts: ["checkout.stripe.com", "buy.stripe.com"], insecureHosts: [], fallbackEmail: undefined, stripeTestCard: false, testHosts: [], openHosts: false });
+  assert.deepEqual([swapConfigFromEnv({ SWAP_OPEN_HOSTS: "1", SWAP_TEST_HOSTS: "LocalHost:8790, shop.test" }).openHosts, swapConfigFromEnv({ SWAP_TEST_HOSTS: "LocalHost:8790, shop.test" }).testHosts], [true, ["localhost:8790", "shop.test"]]);
   assert.throws(() => swapConfigFromEnv({ SWAP_MAX_CENTS: "ten" }), /SWAP_MAX_CENTS/);
 });
 
@@ -94,6 +96,21 @@ test("filler: success redirect, complete state and accordion all count as succee
     assert.equal(r.pageAmountCents, 1000);
   }
   assert.deepEqual(fx!.submissions.slice(-3).map((x) => x.last4), ["4242", "4242", "4242"], "the card reached the form");
+});
+
+test("filler: with a viewer, the fill is narrated step by step and streamed as frames, and still pays", { skip: browserSkip }, async () => {
+  const steps: string[] = [];
+  let frames = 0;
+  const r = await new PlaywrightFiller({ browser, resultTimeoutMs: 5_000, loadTimeoutMs: 10_000 }).fill({
+    url: fx!.url("success", 1000), expectedAmountCents: 1000, card: card(), email: "owner@example.com",
+    watch: { step: (l) => steps.push(l), frame: () => frames++ },
+  });
+  assert.equal(r.outcome, "succeeded");
+  assert.equal(fx!.submissions.at(-1)!.last4, "4242", "typed key by key, the card still reaches the form");
+  for (const want of [/Opening/, /Page total is \$10\.00/, /card number/, /expiry/, /CVC/, /Pressing Pay/, /Payment succeeded/]) {
+    assert.ok(steps.some((x) => want.test(x)), `step ${want}`);
+  }
+  assert.ok(frames > 0, "frames were streamed");
 });
 
 test("filler: a page total that differs stops before any card data is typed", { skip: browserSkip }, async () => {
@@ -159,7 +176,7 @@ class FakeFiller implements CheckoutFiller {
   }
 }
 
-async function setup(cfg: Partial<SwapConfig> = {}, opts: { privacy?: boolean } = {}) {
+async function setup(cfg: Partial<SwapConfig> = {}, opts: { privacy?: boolean; live?: SwapLiveFeed } = {}) {
   const schema = `t_${randomBytes(6).toString("hex")}`;
   await admin!.query(`CREATE SCHEMA ${schema}`);
   schemas.push(schema);
@@ -172,6 +189,7 @@ async function setup(cfg: Partial<SwapConfig> = {}, opts: { privacy?: boolean } 
   const txns: Record<string, unknown>[] = [];
   const asked: string[] = [];
   const lifecycle = {
+    submitKyc: async () => ({ kycStatus: "Initiated" }),
     kycStatus: async () => ({ status: "Approved", customerId: "cust-1", kycToken: "kt" }),
     cardBalance: async () => 0,
     simulateAuthorization: async () => { throw new Error("a swap must never use the simulator"); },
@@ -184,7 +202,6 @@ async function setup(cfg: Partial<SwapConfig> = {}, opts: { privacy?: boolean } 
     users: repos.users, cards: repos.cards, agents: repos.agents, spends: repos.spends, fundings: repos.fundings, oneTimeCards: repos.oneTimeCards,
     ledger, wallets: new AgentWallets(ledger), addresses: createDepositAddressRepository(db, "base-sepolia"),
     deriveAddress: (i: number) => `0x${i.toString(16).padStart(40, "0")}`, tiers: DEFAULT_TIERS, chain: "base-sepolia", sandbox: true, simulatedDeposits: true,
-    miden: { request: async () => ({ isSuccessful: true, responseCode: "00", kycStatus: "Initiated" }) },
     lifecycle,
     cardIssuer: {
       issue: async (_a: string, policy: unknown) => ({ id: `card-${randomBytes(3).toString("hex")}`, agentId: "x", policy, detailsCaptured: true }),
@@ -213,7 +230,7 @@ async function setup(cfg: Partial<SwapConfig> = {}, opts: { privacy?: boolean } 
   const filler = new FakeFiller();
   if (opts.privacy) filler.expectPan = ONE_TIME_PAN;
   const swap = new SwapInteractor({
-    swaps: repos.swaps, app, vault, filler, lifecycle, now: () => new Date(clock),
+    swaps: repos.swaps, app, vault, filler, lifecycle, now: () => new Date(clock), ...(opts.live ? { live: opts.live } : {}),
     config: { enabled: true, maxAmountCents: 1_000, allowedHosts: ["checkout.stripe.com"], ...cfg },
   });
   const balance = () => ledger.balance(accounts.agent(p.cardId, a.agentId));
@@ -263,6 +280,31 @@ test("swap, Stripe test card: a test link is paid with 4242 without opening the 
   const live = await s.swap.pay(s.p, req({ checkoutUrl: "https://checkout.stripe.com/c/pay/cs_live_b2", amountCents: 500, idempotencyKey: "k2" }));
   assert.equal(live.status, "paid");
   assert.equal(s.vault.audit.filter((x) => x.action === "reveal").length, 1, "a live link gets the vaulted card");
+});
+
+test("swap, live view: only a Stripe test-card payment is watched; a vaulted card never gets a viewer", { skip }, async () => {
+  const feed = new SwapLiveFeed();
+  const s = await setup({ stripeTestCard: true }, { live: feed });
+  const seen: SwapLiveEvent[] = [];
+  const otherAgent: SwapLiveEvent[] = [];
+  feed.subscribe(s.p.agentId, (e) => seen.push(e));
+  feed.subscribe("a_someone_else", (e) => otherAgent.push(e));
+
+  s.filler.expectPan = "4242424242424242";
+  const a = await s.swap.pay(s.p, req());
+  assert.equal(a.status, "paid");
+  const watch = s.filler.calls[0]!.watch;
+  assert.ok(watch, "the test-card fill gets a viewer");
+  watch.step("Typing the card number");
+  assert.deepEqual(seen.map((e) => e.type), ["start", "end", "step"]);
+  assert.ok(seen.every((e) => e.swapId === a.swapId));
+  assert.equal(otherAgent.length, 0, "another agent's viewer sees nothing");
+
+  s.filler.expectPan = TEST_CARD.pan;
+  const live = await s.swap.pay(s.p, req({ checkoutUrl: "https://checkout.stripe.com/c/pay/cs_live_b2", amountCents: 500, idempotencyKey: "k2" }));
+  assert.equal(live.status, "paid");
+  assert.equal(s.filler.calls[1]!.watch, undefined, "a real card's page is never watched");
+  assert.equal(seen.filter((e) => e.swapId === live.swapId).length, 0, "and nothing about it is published");
 });
 
 test("swap, Stripe test card: an unclear page result is never matched to a real card authorization", { skip }, async () => {
@@ -480,4 +522,57 @@ test("swap, privacy mode: no one-time card means nothing is typed and nothing is
   assert.match(r.payment!.reason!, /Limit 3 Exceeded/);
   assert.equal(s.filler.calls.length, 0);
   assert.equal(await s.balance(), 2_000);
+});
+
+// ---------- unfamiliar checkouts: open hosts and test shops ----------
+
+const SHOP = "https://shop.example.com/checkout/o_1";
+
+test("swap, open hosts: off by default; on, any public https page is paid only with a one-time card, never the user's own", { skip }, async () => {
+  const closed = await setup();
+  await assert.rejects(closed.swap.pay(closed.p, req({ checkoutUrl: SHOP })), /not supported/);
+
+  const s = await setup({ openHosts: true });
+  s.filler.expectPan = ONE_TIME_PAN;
+  // Not in privacy mode, and the user's own card is not even needed on file.
+  await s.vault.discard(s.p.cardId, "test");
+  const r = await s.swap.pay(s.p, req({ checkoutUrl: SHOP }));
+  assert.equal(r.status, "paid");
+  assert.equal(s.oneTimeCards.length, 1, "a one-time card was made for this payment");
+  assert.deepEqual(s.vault.audit.filter((x) => x.action === "reveal").map((x) => x.cardId), [s.oneTimeCards[0]]);
+  assert.equal(await s.vault.has(s.oneTimeCards[0]!), false, "and discarded afterwards");
+  assert.equal(s.filler.calls[0]!.watch, undefined, "a real card's page is never watched");
+  assert.equal(await s.balance(), 1_000);
+
+  // An allowlisted host still uses the user's own card.
+  s.filler.expectPan = TEST_CARD.pan;
+  await s.vault.put(s.p.cardId, card());
+  assert.equal((await s.swap.pay(s.p, req({ idempotencyKey: "k2", amountCents: 500 }))).status, "paid");
+  assert.equal(s.oneTimeCards.length, 1);
+});
+
+test("swap, open hosts: this machine, private networks and plain http are refused before anything is reserved", { skip }, async () => {
+  const s = await setup({ openHosts: true });
+  for (const u of ["https://localhost/pay", "https://127.0.0.1:8443/pay", "https://10.0.0.5/pay", "https://169.254.169.254/latest", "https://intranet/pay", "https://[::1]/pay", "http://shop.example.com/pay"]) {
+    await assert.rejects(s.swap.pay(s.p, req({ checkoutUrl: u, idempotencyKey: u })), (e: { status?: number }) => e.status === 400, u);
+  }
+  assert.equal(s.filler.calls.length, 0);
+  assert.equal(await s.balance(), 2_000);
+});
+
+test("swap, test shops: a test shop's page is paid with the 4242 test card and can be watched; off test-card mode it is refused", { skip }, async () => {
+  const feed = new SwapLiveFeed();
+  const s = await setup({ stripeTestCard: true, testHosts: ["localhost:8790"] }, { live: feed });
+  s.filler.expectPan = "4242424242424242";
+  const seen: SwapLiveEvent[] = [];
+  feed.subscribe(s.p.agentId, (e) => seen.push(e));
+  const r = await s.swap.pay(s.p, req({ checkoutUrl: "http://localhost:8790/shop/ankara/checkout/o_1" }));
+  assert.equal(r.status, "paid");
+  assert.ok(s.filler.calls[0]!.watch, "the test-card fill gets a viewer");
+  assert.equal(seen[0]!.type, "start");
+  assert.equal(s.oneTimeCards.length, 0);
+  assert.equal(s.vault.audit.filter((x) => x.action === "reveal").length, 0, "the vault is never opened");
+
+  const off = await setup({ testHosts: ["localhost:8790"] });
+  await assert.rejects(off.swap.pay(off.p, req({ checkoutUrl: "http://localhost:8790/shop/ankara/checkout/o_1" })), /not supported/);
 });

@@ -3,6 +3,7 @@ import { PlaywrightFiller } from "./PlaywrightFiller.js";
 import { ShopifyFiller } from "./ShopifyFiller.js";
 import { LemonSqueezyFiller } from "./LemonSqueezyFiller.js";
 import { PaddleFiller } from "./PaddleFiller.js";
+import { AdaptiveFiller } from "./AdaptiveFiller.js";
 
 /**
  * Picks the filler that knows the page: Stripe Checkout (stripe.com hosts, /c/pay/ links) or a Shopify checkout
@@ -10,15 +11,21 @@ import { PaddleFiller } from "./PaddleFiller.js";
  * Which hosts may be paid at all is the swap's allowlist (SWAP_ALLOWED_HOSTS), not this.
  */
 export class RoutingFiller implements CheckoutFiller {
-  private readonly fillers: { stripe: CheckoutFiller; shopify: CheckoutFiller; lemonsqueezy: CheckoutFiller; paddle: CheckoutFiller };
-  /** Fillers not given are the real ones; tests pass stand-ins for the kinds they exercise. */
-  constructor(fillers: { stripe?: CheckoutFiller; shopify?: CheckoutFiller; lemonsqueezy?: CheckoutFiller; paddle?: CheckoutFiller } = {}) {
+  private readonly fillers: { stripe: CheckoutFiller; shopify: CheckoutFiller; lemonsqueezy: CheckoutFiller; paddle: CheckoutFiller; other?: CheckoutFiller };
+  /** Fillers not given are the real ones; tests pass stand-ins for the kinds they exercise. `other` has no default. */
+  constructor(fillers: { stripe?: CheckoutFiller; shopify?: CheckoutFiller; lemonsqueezy?: CheckoutFiller; paddle?: CheckoutFiller; other?: CheckoutFiller } = {}) {
     this.fillers = {
       stripe: fillers.stripe ?? new PlaywrightFiller(),
       shopify: fillers.shopify ?? new ShopifyFiller(),
       lemonsqueezy: fillers.lemonsqueezy ?? new LemonSqueezyFiller(),
       paddle: fillers.paddle ?? new PaddleFiller(),
+      ...(fillers.other ? { other: fillers.other } : {}),
     };
+  }
+
+  /** The default set plus the adaptive filler for every other page. */
+  static withAdaptive(adaptive: AdaptiveFiller = new AdaptiveFiller()): RoutingFiller {
+    return new RoutingFiller({ other: adaptive });
   }
 
   fill(req: FillRequest): Promise<FillResult> {
@@ -27,6 +34,7 @@ export class RoutingFiller implements CheckoutFiller {
     if (kind === "shopify") return this.fillers.shopify.fill(req);
     if (kind === "lemonsqueezy") return this.fillers.lemonsqueezy.fill(req);
     if (kind === "paddle") return this.fillers.paddle.fill(req);
+    if (this.fillers.other) return this.fillers.other.fill(req);
     return Promise.resolve({ outcome: "unsupported_page", submitted: false, detail: "no filler for this kind of checkout page" });
   }
 }

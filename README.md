@@ -1,8 +1,8 @@
 # OpenWallet
 
-Virtual cards for AI agents, funded with stablecoins, built on the [Miden Workspace API](https://docs.miden.co/getting-started) (the card-issuance REST API, not the Miden blockchain).
+Virtual cards for AI agents, funded with stablecoins. Card issuing is pluggable: a built-in **mock** provider runs with no external accounts, and the [Miden Workspace API](https://docs.miden.co/getting-started) (the card-issuance REST API, not the Miden blockchain) is the first real provider. See [card providers](docs/card-providers.md).
 
-**Status:** works end to end in the Miden sandbox. **Sandbox only, not production-ready:** see [production gaps](docs/production-gaps.md).
+**Status:** works end to end with the mock provider and in the Miden sandbox. **Sandbox only, not production-ready:** see [production gaps](docs/production-gaps.md).
 
 ## Start here
 
@@ -14,7 +14,7 @@ Virtual cards for AI agents, funded with stablecoins, built on the [Miden Worksp
 
 [![agent-cards architecture](docs/architecture.png)](docs/architecture.svg)
 
-1. A user signs up and passes card KYC. Miden issues one card.
+1. A user signs up and passes card KYC. The card provider issues one card.
 2. USDC sent to the user's Base deposit address is credited to our ledger, then moved onto the card.
 3. The owner gives agents budgets and limits. Agents pay over MCP or REST.
 4. Merchants take agent payments through checkouts and are paid out in USDC.
@@ -24,7 +24,7 @@ Full structure, flows and design decisions: [docs/architecture.md](docs/architec
 ## Run the sandbox service
 
 ```
-scripts/sandbox-up.sh                            # Postgres + the service on 127.0.0.1:8787; needs MIDEN_* in the env
+scripts/sandbox-up.sh                            # Postgres + the service on 127.0.0.1:8787; with no MIDEN_* set it uses the mock card provider
 node --import tsx scripts/sandbox-demo.ts        # end-to-end check against the Miden sandbox (moves sandbox money)
 open http://127.0.0.1:8787                       # owner dashboard
 ```

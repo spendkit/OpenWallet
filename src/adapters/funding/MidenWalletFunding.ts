@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { MidenApiError, type MidenClient } from "../../lib/clients/cardIssuing/miden/MidenClient.js";
+import { DuplicateReferenceError } from "../../domain/errors/CardProviderErrors.js";
 import type { FundingReceipt, FundingRequest, FundingSource } from "../../domain/interfaces/FundingSource.js";
 
 /** Miden's 400 body when a Reference was already used in the last 24h (docs: Idempotency in Miden APIs). */
 const DUPLICATE_REFERENCE = /already been seen/i;
 
 /** The Reference was already processed: the first call went through, so look the top-up up instead of retrying. */
-export class MidenDuplicateReferenceError extends Error {
-  constructor(readonly idempotencyKey: string, cause: MidenApiError) {
-    super(`Miden top-up ${idempotencyKey} was already processed; reconcile via GET api/v1/cards/transactions`, { cause });
+export class MidenDuplicateReferenceError extends DuplicateReferenceError {
+  constructor(idempotencyKey: string, cause: MidenApiError) {
+    super(idempotencyKey, `Miden top-up ${idempotencyKey} was already processed; reconcile via GET api/v1/cards/transactions`, { cause });
     this.name = "MidenDuplicateReferenceError";
   }
 }
